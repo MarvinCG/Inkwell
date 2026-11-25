@@ -1,5 +1,5 @@
 // Inkwell service worker: offline app shell. Bump VERSION when deploying changes.
-const VERSION = 'inkwell-1.3.0';
+const VERSION = 'inkwell-1.4.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/store.js', 'js/sync.js', 'js/github.js', 'js/ink.js', 'js/ui.js', 'js/icons.js', 'js/sanitize.js', 'js/pdf.js', 'vendor/html2canvas.min.js',
@@ -7,7 +7,9 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache (GitHub Pages keeps files 10 min): otherwise a new
+  // index.html could be cached next to an old app.js right after a deploy, and the modules would not match.
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -29,7 +31,7 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(
       caches.open(VERSION).then(async (c) => {
         const cached = await c.match('index.html');
-        const fresh = fetch(req).then((res) => { if (res.ok) c.put('index.html', res.clone()); return res; }).catch(() => null);
+        const fresh = fetch(req.url, { cache: 'no-cache' }).then((res) => { if (res.ok) c.put('index.html', res.clone()); return res; }).catch(() => null);
         return cached || (await fresh) || new Response('Offline', { status: 503 });
       }),
     );
@@ -39,7 +41,8 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.open(VERSION).then(async (c) => {
       const cached = await c.match(req, { ignoreSearch: true });
-      const fresh = fetch(req).then((res) => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => null);
+      // revalidate (cheap 304) instead of trusting the HTTP cache, for the same reason as above
+      const fresh = fetch(req, { cache: 'no-cache' }).then((res) => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => null);
       return cached || (await fresh) || new Response('', { status: 504 });
     }),
   );

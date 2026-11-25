@@ -76,6 +76,7 @@ Notes you wrote before setting up sync are uploaded on the first sync.
 - When: about 15 s after you stop editing, when you leave the app, every minute while it's open, and when the network comes back. Offline? Keep working — it catches up later.
 - Two devices syncing at the same moment can't overwrite each other: pushes are fast-forward only, and the second device re-reads and retries.
 - The same note edited on two devices between syncs → you get both, one named “… (conflict copy)”. Deleted on one device but edited on another → the edit wins.
+- The same applies to the note you're writing in right now: if another device's changes arrive while you have unsaved typing, your version stays in the note and theirs is saved as “… (conflict copy)”. If it was deleted elsewhere, it stays open and your edits keep it.
 
 **Privacy:** keep `inkwell-data` private (Settings → Test connection warns if it isn't). The token is stored in the app's storage on each device. All GitHub Pages sites under `marvincg.github.io` share one browser origin, so only publish your own pages there; you can revoke the token on GitHub any time and paste a new one.
 
@@ -100,7 +101,7 @@ Then choose **Settings → Sync → Own server** and paste the `SYNC_TOKEN`. Bac
 
 ## Updating
 
-Push changes to `main` (bump `VERSION` in `web/sw.js` so installed apps pick them up). Open apps show “Inkwell was updated — Reload”.
+Push changes to `main` (bump `VERSION` in `web/sw.js` and `web/js/app.js` so installed apps pick them up). Open apps show “Inkwell was updated — Reload”; the version is shown at the bottom of Settings.
 
 ## Limits
 

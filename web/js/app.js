@@ -1,13 +1,13 @@
 // Inkwell Notes — main app
 import { store, uid } from './store.js';
 import { Sync } from './sync.js';
-import { InkLayer, PALETTE, DEFAULT_SIZES, renderThumb, drawStroke, bbox } from './ink.js';
+import { InkLayer, PALETTE, DEFAULT_SIZES, renderThumb, drawStroke, bbox, cloneInk } from './ink.js';
 import { sanitizeHTML, htmlToText, firstImage, escapeHTML } from './sanitize.js';
 import { icon, hydrateIcons, setIcon } from './icons.js';
 import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog, promptDialog } from './ui.js';
 import { notePDF } from './pdf.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -59,12 +59,18 @@ function inkColor(c, t) {
   if (l > 0.85 && t !== 'hl') return '#262626';
   return c;
 }
+// Intl formatters are expensive to create; toLocale*String() builds a new one on every call.
+const FMT = {
+  time: new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }),
+  day: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }),
+  full: new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+};
 function fmtDate(ts) {
   if (!ts) return '';
   const d = new Date(ts), now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  if (d.toDateString() === now.toDateString()) return FMT.time.format(d);
+  if (d.getFullYear() === now.getFullYear()) return FMT.day.format(d);
+  return FMT.full.format(d);
 }
 function timeAgo(ts) {
   if (!ts) return 'never';
@@ -208,13 +214,35 @@ function visibleNotes() {
   return list;
 }
 function miniHTML(it) {
-  const d = it.data;
-  const doc = new DOMParser().parseFromString(`<body>${d.html || ''}</body>`, 'text/html');
-  const kids = [...doc.body.childNodes];
-  kids.slice(30).forEach((k) => k.remove());
+  // Synced HTML is untrusted: same allow-list as the editor. Only the top of the note is shown.
+  const doc = new DOMParser().parseFromString(`<body>${sanitizeHTML(it.data.html || '')}</body>`, 'text/html');
+  [...doc.body.childNodes].slice(30).forEach((k) => k.remove());
   doc.querySelectorAll('audio').forEach((a) => a.remove());
-  doc.querySelectorAll('img').forEach((i) => i.setAttribute('decoding', 'async'));
+  doc.querySelectorAll('img').forEach((i) => { i.setAttribute('decoding', 'async'); i.setAttribute('loading', 'lazy'); });
   return doc.body.innerHTML;
+}
+// Card previews are built only when a card comes near the screen: with hundreds of notes,
+// building them all up front took seconds on a phone.
+const thumbIO = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    thumbIO.unobserve(e.target);
+    fillThumb(e.target, e.boundingClientRect.width);
+  }
+}, { root: el.notes, rootMargin: '800px 0px' });
+function fillThumb(t, w) {
+  const it = store.get(t.closest('.card')?.dataset.id);
+  if (!it || t._filled) return;
+  t._filled = true;
+  const d = it.data, pw = +t.dataset.pw;
+  const k = w ? w / pw : 0.3;
+  t._k = k;
+  t.innerHTML = `
+      <div class="page mini pat-${escapeHTML(d.pattern || 'none')} paper-${escapeHTML(d.paper || 'white')}" style="width:${pw}px;transform:scale(${k})">
+        ${d.title ? `<div class="mini-title">${escapeHTML(d.title)}</div>` : ''}
+        <div class="note-body">${miniHTML(it)}</div>
+      </div>
+      ${it.preview ? `<img class="ink-thumb" alt="" decoding="async" src="${escapeHTML(it.preview)}">` : ''}`;
 }
 function cardEl(it) {
   const d = it.data;
@@ -229,13 +257,7 @@ function cardEl(it) {
   a.dataset.id = it.id;
   a.setAttribute('role', 'listitem');
   a.innerHTML = `
-    <div class="card-thumb" data-pw="${pw}">
-      <div class="page mini pat-${escapeHTML(d.pattern || 'none')} paper-${escapeHTML(d.paper || 'white')}" style="width:${pw}px">
-        ${d.title ? `<div class="mini-title">${escapeHTML(d.title)}</div>` : ''}
-        <div class="note-body">${miniHTML(it)}</div>
-      </div>
-      ${it.preview ? `<img class="ink-thumb" alt="" src="${it.preview}">` : ''}
-    </div>
+    <div class="card-thumb paper-${escapeHTML(d.paper || 'white')}" data-pw="${+pw || WIDE_PAGE}"></div>
     <div class="card-meta">
       <div class="card-title">${escapeHTML(noteTitle(it))}</div>
       <div class="card-preview">${escapeHTML((it.text || '').replace(/\s+/g, ' ').slice(0, 140))}</div>
@@ -246,11 +268,12 @@ function cardEl(it) {
   return a;
 }
 function scaleMinis() {
-  el.notes.querySelectorAll('.card-thumb').forEach((t) => {
-    const w = t.clientWidth;
-    if (!w) return;
-    const k = w / +t.dataset.pw;
-    if (t._k !== k) { t._k = k; t.firstElementChild.style.transform = `scale(${k})`; }
+  // all reads first, then all writes (no layout thrashing)
+  const thumbs = [...el.notes.querySelectorAll('.card-thumb')].filter((t) => t._filled);
+  const ws = thumbs.map((t) => t.clientWidth);
+  thumbs.forEach((t, i) => {
+    const k = ws[i] / +t.dataset.pw;
+    if (ws[i] && t._k !== k && t.firstElementChild) { t._k = k; t.firstElementChild.style.transform = `scale(${k})`; }
   });
 }
 new ResizeObserver(() => scaleMinis()).observe(el.notes);
@@ -271,6 +294,8 @@ function renderList(resetScroll = false) {
   const frag = document.createDocumentFragment();
   for (const it of list) frag.append(cardEl(it));
   el.notes.replaceChildren(frag);
+  thumbIO.disconnect();
+  for (const t of el.notes.querySelectorAll('.card-thumb')) if (!t._filled) thumbIO.observe(t);
   // drop cache entries for notes that no longer exist
   if (cardCache.size > list.length + 200) for (const id of cardCache.keys()) if (!store.get(id)) cardCache.delete(id);
   el.empty.hidden = list.length > 0;
@@ -478,7 +503,9 @@ function layout() {
   // Width changed (rotation, entering full screen): keep the same line of the note at the top.
   if (oldS && Math.abs(oldS - s) > 1e-3 && !state.anchoring) el.scroller.scrollTop = Math.max(0, el.wrap.offsetTop + topLogical * s);
   state.lastScale = s;
-  ink.render();
+  // Redraw the handwriting only when the page actually moved or rescaled (not on every keystroke/stroke).
+  const key = `${s}|${el.wrap.offsetLeft}|${el.wrap.offsetTop}|${el.scroller.clientWidth}|${el.scroller.clientHeight}`;
+  if (key !== state.inkViewKey) { state.inkViewKey = key; ink.render(); }
 }
 function zoomTo(z, cx, cy, anchor) {
   z = clamp(z, 0.4, 4);
@@ -541,6 +568,7 @@ function openNote(id, { isNew = false } = {}) {
   try { if (!history.state || !history.state.editor) history.pushState({ editor: id }, ''); } catch { /* sandboxed preview */ }
   state.zoom = pref('zoom', 1);
   state.lastScale = 0;
+  state.inkViewKey = '';
   ink.resize();
   layout();
   el.scroller.scrollTop = 0;
@@ -556,7 +584,8 @@ function loadIntoEditor(it) {
   applyPageStyle(d);
   el.title.value = d.title || '';
   el.body.innerHTML = sanitizeHTML(d.html || '');
-  ink.load(structuredClone(d.ink || []));
+  ink.load(cloneInk(d.ink));
+  state.baseData = d; // what the editor started from: lets us tell real remote edits from metadata changes
   el.btnFav.classList.toggle('on', !!d.favorite);
   el.saveState.textContent = '';
 }
@@ -571,6 +600,7 @@ async function closeEditor() {
   setMode(false);
   exitFull();
   el.editor.hidden = true;
+  ink.release();
   state.current = null;
   state.draft = null;
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -597,9 +627,12 @@ async function saveNow() {
   clearTimeout(saveTimer);
   if (!state.current || !state.editorDirty) return;
   state.editorDirty = false;
-  const base = store.get(state.current) || state.draft;
+  const cur = store.get(state.current);
+  const base = cur || state.draft;
   if (!base) return;
-  const data = { ...base.data, title: el.title.value.trim(), html: bodyHTML(), ink: structuredClone(ink.serialize()), pageWidth: state.pageWidth };
+  // a tombstone (deleted on another device) has no data: keep folder, paper etc. from what we opened
+  const prev = cur && cur.data && !cur.deleted ? cur.data : state.baseData || base.data || {};
+  const data = { ...prev, title: el.title.value.trim(), html: bodyHTML(), ink: cloneInk(ink.serialize()), pageWidth: state.pageWidth };
   if (!store.get(state.current) && isEmptyData(data)) return; // empty new note stays a draft
   const item = { ...base, data, deleted: false };
   item.text = htmlToText(data.html);
@@ -607,6 +640,7 @@ async function saveNow() {
   if (state.inkDirty || base.preview === undefined) item.preview = renderThumb(data.ink, data.pageWidth);
   state.inkDirty = false;
   state.draft = null;
+  state.baseData = data;
   await saveItem(item, 'editor');
   el.saveState.textContent = 'Saved';
 }
@@ -936,19 +970,28 @@ el.body.addEventListener('drop', (e) => {
 // ───────── images ─────────
 el.fileImage.addEventListener('change', () => { const files = [...el.fileImage.files]; el.fileImage.value = ''; insertImages(files); });
 async function compressImage(file, max = 1600) {
-  let src;
+  let src, url = '';
   try { src = await createImageBitmap(file); } catch {
-    src = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    url = URL.createObjectURL(file);
+    src = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('unreadable image')); i.src = url; })
+      .finally(() => URL.revokeObjectURL(url));
   }
-  const w0 = src.width, h0 = src.height;
-  const k = Math.min(1, max / Math.max(w0, h0));
-  const c = document.createElement('canvas');
-  c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(src, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.82);
+  try {
+    const w0 = src.width, h0 = src.height;
+    if (!w0 || !h0) throw new Error('empty image');
+    const k = Math.min(1, max / Math.max(w0, h0));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w0 * k)); c.height = Math.max(1, Math.round(h0 * k));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    const out = c.toDataURL('image/jpeg', 0.82);
+    c.width = c.height = 0; // give the pixels back now (Safari)
+    return out;
+  } finally {
+    if (src && src.close) src.close();
+  }
 }
 async function insertImages(files) {
   for (const f of files) {
@@ -970,7 +1013,12 @@ async function startRecording() {
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { toast('Microphone permission denied'); return; }
   const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find((m) => MediaRecorder.isTypeSupported(m));
-  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : undefined);
+  let rec;
+  try { rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : undefined); }
+  catch {
+    try { rec = new MediaRecorder(stream); } // some browsers reject the options
+    catch { stream.getTracks().forEach((t) => t.stop()); toast('Could not start recording on this device'); return; }
+  }
   const chunks = [];
   const started = Date.now();
   state.rec = { rec, stream, range, cancel: false, timer: 0 };
@@ -989,7 +1037,9 @@ async function startRecording() {
     setMode(false);
     exec('insertHTML', `<div class="voice" contenteditable="false"><audio controls src="${url}"></audio><span>Voice · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}</span></div><p><br></p>`);
   };
-  rec.start(1000);
+  rec.onerror = () => { toast('Recording stopped: the microphone reported an error'); stopRecording(false); };
+  try { rec.start(1000); }
+  catch { stream.getTracks().forEach((t) => t.stop()); state.rec = null; toast('Could not start recording on this device'); return; }
   el.recBar.hidden = false;
   el.recTime.textContent = '0:00';
   state.rec.timer = setInterval(() => {
@@ -1045,9 +1095,10 @@ el.drawToolbar.addEventListener('click', (e) => {
   if (sw) selectColor(sw.dataset.color);
 });
 el.customColor.addEventListener('input', () => selectColor(el.customColor.value));
+const saveSizes = debounce(() => setPref('sizes', { ...ink.sizes }), 400); // a database write per slider tick was wasteful
 el.sizeRange.addEventListener('input', () => {
   ink.sizes[ink.tool] = +el.sizeRange.value;
-  setPref('sizes', ink.sizes);
+  saveSizes();
   updateSizeDot();
 });
 const TOUCH_MODES = {
@@ -1365,12 +1416,14 @@ $('btnSettings').addEventListener('click', () => { openDrawer(false); openSettin
 function exportBackup() {
   const items = [...store.items.values()].filter((i) => !i.deleted).map(({ id, type, updatedAt, data }) => ({ id, type, updatedAt, data }));
   const blob = new Blob([JSON.stringify({ app: 'inkwell', version: 1, exportedAt: new Date().toISOString(), items })], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `inkwell-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.append(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  const name = `inkwell-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  // iPad/iPhone home-screen apps ignore download links: hand the file to the share sheet (Save to Files)
+  const file = IS_IOS && typeof File === 'function' ? new File([blob], name, { type: 'application/json' }) : null;
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file], title: 'Inkwell backup' }).catch((e) => { if (e.name !== 'AbortError') downloadBlob(blob, name); });
+    return;
+  }
+  downloadBlob(blob, name);
 }
 el.fileImport.addEventListener('change', async () => {
   const f = el.fileImport.files[0];
@@ -1398,21 +1451,47 @@ store.onChange((ids, source) => {
   if (source === 'quota') { toast('Device storage is full — some changes could not be saved.', { ms: 8000 }); return; }
   if (source === 'editor') { state.listStale = true; renderNav(); return; }
   renderAll();
-  if (source === 'sync' && state.current && ids.includes(state.current)) {
-    const it = store.get(state.current);
-    if (!it || it.deleted || (it.data && it.data.trashedAt)) {
-      toast('This note was deleted on another device');
-      state.editorDirty = false;
-      state.sessionNew = false;
-      if (history.state && history.state.editor) history.back(); else closeEditor();
-    } else if (!state.editorDirty && !it.dirty) {
-      const top = el.scroller.scrollTop;
-      loadIntoEditor(it);
-      layout();
-      el.scroller.scrollTop = top;
-    }
-  }
+  if (source === 'sync' && state.current && ids.includes(state.current)) remoteChangedOpenNote(store.get(state.current));
 });
+/** Another device changed the note that's open here. Unsaved edits are never thrown away. */
+async function remoteChangedOpenNote(it) {
+  const gone = !it || it.deleted || !it.data || it.data.trashedAt;
+  if (gone) {
+    if (state.editorDirty) {
+      // edit beats delete: keep the note, with these edits, out of the trash
+      if (it && it.data && it.data.trashedAt) state.baseData = { ...it.data, trashedAt: null };
+      else if (state.baseData) state.baseData = { ...state.baseData, trashedAt: null };
+      if (it && it.data) it.data = { ...it.data, trashedAt: null };
+      await saveNow();
+      toast('This note was deleted on another device — your edits were kept');
+      return;
+    }
+    toast('This note was deleted on another device');
+    state.sessionNew = false;
+    if (history.state && history.state.editor) history.back(); else closeEditor();
+    return;
+  }
+  if (state.editorDirty) {
+    // unsaved typing here + a real edit there: keep theirs as a copy, then save ours over the note
+    const b = state.baseData || {};
+    const theirs = it.data;
+    const edited = (theirs.title || '') !== (b.title || '') || (theirs.html || '') !== (b.html || '') || JSON.stringify(theirs.ink || []) !== JSON.stringify(b.ink || []);
+    if (edited) {
+      const now = Date.now();
+      await saveItem(decorate({ id: uid(), type: 'note', updatedAt: now, deleted: false, dirty: true, baseRev: 0,
+        data: { ...theirs, ink: cloneInk(theirs.ink), title: `${noteTitle(it)} (conflict copy)`, createdAt: now } }));
+      toast('Edited on another device too — their version was saved as a copy', { ms: 6000 });
+    }
+    await saveNow();
+    return;
+  }
+  if (!it.dirty) {
+    const top = el.scroller.scrollTop;
+    loadIntoEditor(it);
+    layout();
+    el.scroller.scrollTop = top;
+  }
+}
 
 document.addEventListener('keydown', (e) => {
   if (dialogOpen()) return;

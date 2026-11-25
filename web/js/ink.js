@@ -8,10 +8,13 @@ import { uid } from './store.js';
 export const PALETTE = ['#1a1a1a', '#5f6368', '#1f6feb', '#0b8a7a', '#2e9d44', '#f2b600', '#f26b1d', '#e5484d', '#d6409f', '#8e4ec6', '#8d5a3b', '#ffffff'];
 export const DEFAULT_SIZES = { pen: 3, pencil: 2.5, hl: 16, eraser: 10 };
 
+const TILE = 512; // CSS px: height of an ink strip (width = page width, up to MAX_TW)
+const MAX_TW = 2048;
 const r1 = (v) => Math.round(v * 10) / 10;
 const r2 = (v) => Math.round(v * 100) / 100;
 
 const bboxCache = new WeakMap();
+const pathCache = new WeakMap(); // stroke → { path, width, alpha } (rebuilt when the stroke's points change)
 export function bbox(s) {
   let b = bboxCache.get(s);
   if (b) return b;
@@ -27,77 +30,118 @@ export function bbox(s) {
   bboxCache.set(s, b);
   return b;
 }
-const invalidate = (s) => bboxCache.delete(s);
+const invalidate = (s) => { bboxCache.delete(s); pathCache.delete(s); };
 
 function penWidth(s, pr) { return s.w * (0.28 + 0.95 * Math.pow(Math.max(0.02, pr), 0.85)); }
 
-/** Draw one stroke in logical coordinates onto ctx (transform already set). */
-export function drawStroke(ctx, s, colorFn = (c) => c, hlAlpha = 0.32) {
-  const p = s.p, n = p.length / 3;
-  if (!n) return;
-  const color = colorFn(s.c, s.t);
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  if (s.t === 'hl' || s.t === 'pencil') {
-    let avg = 0;
-    for (let i = 2; i < p.length; i += 3) avg += p[i];
-    avg /= n;
-    if (s.t === 'hl') { ctx.globalAlpha = hlAlpha; ctx.lineWidth = s.w; }
-    else { ctx.globalAlpha = 0.5 + 0.45 * avg; ctx.lineWidth = s.w * (0.55 + 0.6 * avg); }
-    if (n === 1) {
-      ctx.beginPath(); ctx.arc(p[0], p[1], ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(p[0], p[1]);
-      for (let i = 1; i < n - 1; i++) {
-        const x = p[i * 3], y = p[i * 3 + 1];
-        ctx.quadraticCurveTo(x, y, (x + p[i * 3 + 3]) / 2, (y + p[i * 3 + 4]) / 2);
-      }
-      ctx.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
-      ctx.stroke();
+/**
+ * Centerline samples of a stroke: the same midpoint-quadratic smoothing the app has always used,
+ * flattened into points (x, y, pressure) so a pen stroke can be drawn as ONE filled outline.
+ */
+function centerline(p) {
+  const n = p.length / 3;
+  const out = [p[0], p[1], p[2]];
+  const quad = (x0, y0, p0, cx, cy, pc, x1, y1, p1) => {
+    const len = Math.hypot(cx - x0, cy - y0) + Math.hypot(x1 - cx, y1 - cy);
+    const steps = Math.min(8, Math.max(1, Math.ceil(len / 3)));
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps, u = 1 - t;
+      out.push(u * u * x0 + 2 * u * t * cx + t * t * x1, u * u * y0 + 2 * u * t * cy + t * t * y1, u * p0 + t * p1 + 0 * pc);
     }
-    ctx.restore();
-    return;
+  };
+  let sx = (p[0] + p[3]) / 2, sy = (p[1] + p[4]) / 2, sp = (p[2] + p[5]) / 2;
+  out.push(sx, sy, sp);
+  for (let i = 1; i < n - 1; i++) {
+    const x = p[i * 3], y = p[i * 3 + 1], pr = p[i * 3 + 2];
+    const mx = (x + p[i * 3 + 3]) / 2, my = (y + p[i * 3 + 4]) / 2, mp = (pr + p[i * 3 + 5]) / 2;
+    quad(sx, sy, sp, x, y, pr, mx, my, mp);
+    sx = mx; sy = my; sp = mp;
   }
+  out.push(p[(n - 1) * 3], p[(n - 1) * 3 + 1], p[(n - 1) * 3 + 2]);
+  return out;
+}
 
-  // Pen: variable width. Pieces between midpoints, grouped while width is similar.
-  if (n === 1) {
-    ctx.beginPath(); ctx.arc(p[0], p[1], penWidth(s, p[2]) / 2, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-    return;
+/** Variable-width pen stroke as a single closed outline (+ round caps). */
+function penPath(s) {
+  const p = s.p, n = p.length / 3;
+  const path = new Path2D();
+  if (n === 1) { const r = penWidth(s, p[2]) / 2; path.moveTo(p[0] + r, p[1]); path.arc(p[0], p[1], r, 0, Math.PI * 2); return path; }
+  const c = centerline(p);
+  const m = c.length / 3;
+  const L = new Float64Array(m * 2), R = new Float64Array(m * 2);
+  let r0 = 0, r1 = 0;
+  for (let i = 0; i < m; i++) {
+    const a = Math.max(0, i - 1), b = Math.min(m - 1, i + 1);
+    let dx = c[b * 3] - c[a * 3], dy = c[b * 3 + 1] - c[a * 3 + 1];
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const r = penWidth(s, c[i * 3 + 2]) / 2;
+    if (i === 0) r0 = r;
+    if (i === m - 1) r1 = r;
+    L[i * 2] = c[i * 3] - dy * r; L[i * 2 + 1] = c[i * 3 + 1] + dx * r;
+    R[i * 2] = c[i * 3] + dy * r; R[i * 2 + 1] = c[i * 3 + 1] - dx * r;
   }
-  const tol = Math.max(0.12, s.w * 0.06);
-  let curW = -1;
-  let sx = p[0], sy = p[1];
-  const begin = (w, x, y) => { ctx.beginPath(); ctx.lineWidth = w; curW = w; ctx.moveTo(x, y); };
-  const flush = () => { if (curW >= 0) ctx.stroke(); };
-  // first piece: P0 -> M0
-  {
-    const w = penWidth(s, (p[2] + p[5]) / 2);
-    begin(w, sx, sy);
-    const mx = (p[0] + p[3]) / 2, my = (p[1] + p[4]) / 2;
-    ctx.lineTo(mx, my);
-    sx = mx; sy = my;
-  }
+  path.moveTo(L[0], L[1]);
+  for (let i = 1; i < m; i++) path.lineTo(L[i * 2], L[i * 2 + 1]);
+  for (let i = m - 1; i >= 0; i--) path.lineTo(R[i * 2], R[i * 2 + 1]);
+  path.closePath();
+  // round caps
+  const ex = c[(m - 1) * 3], ey = c[(m - 1) * 3 + 1];
+  path.moveTo(c[0] + r0, c[1]); path.arc(c[0], c[1], r0, 0, Math.PI * 2);
+  path.moveTo(ex + r1, ey); path.arc(ex, ey, r1, 0, Math.PI * 2);
+  return path;
+}
+
+/** Highlighter / pencil: one centerline stroked at a constant width. */
+function linePath(s) {
+  const p = s.p, n = p.length / 3;
+  let avg = 0;
+  for (let i = 2; i < p.length; i += 3) avg += p[i];
+  avg /= n;
+  const width = s.t === 'hl' ? s.w : s.w * (0.55 + 0.6 * avg);
+  const alpha = s.t === 'hl' ? null : 0.5 + 0.45 * avg;
+  const path = new Path2D();
+  if (n === 1) { path.moveTo(p[0] + width / 2, p[1]); path.arc(p[0], p[1], width / 2, 0, Math.PI * 2); return { path, width, alpha, dot: true }; }
+  path.moveTo(p[0], p[1]);
   for (let i = 1; i < n - 1; i++) {
     const x = p[i * 3], y = p[i * 3 + 1];
-    const mx = (x + p[i * 3 + 3]) / 2, my = (y + p[i * 3 + 4]) / 2;
-    const w = penWidth(s, p[i * 3 + 2]);
-    if (Math.abs(w - curW) > tol) { flush(); begin(w, sx, sy); }
-    ctx.quadraticCurveTo(x, y, mx, my);
-    sx = mx; sy = my;
+    path.quadraticCurveTo(x, y, (x + p[i * 3 + 3]) / 2, (y + p[i * 3 + 4]) / 2);
   }
-  {
-    const w = penWidth(s, p[(n - 1) * 3 + 2]);
-    if (Math.abs(w - curW) > tol) { flush(); begin(w, sx, sy); }
-    ctx.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+  path.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+  return { path, width, alpha, dot: false };
+}
+
+function geometry(s, cache) {
+  let g = cache ? pathCache.get(s) : null;
+  if (!g) {
+    g = s.t === 'hl' || s.t === 'pencil' ? linePath(s) : { path: penPath(s), dot: true };
+    if (cache) pathCache.set(s, g);
   }
-  flush();
-  ctx.restore();
+  return g;
+}
+
+/**
+ * Draw one stroke in logical coordinates onto ctx (transform already set).
+ * cache=false for the stroke being drawn right now (its points change every frame).
+ */
+/** Copy strokes (much faster than structuredClone for big notes: 450k numbers in a few ms). */
+export function cloneInk(list) {
+  return (list || []).map((x) => ({ ...x, p: x.p.slice() }));
+}
+export function drawStroke(ctx, s, colorFn = (c) => c, hlAlpha = 0.32, cache = true) {
+  if (!s.p.length) return;
+  const g = geometry(s, cache);
+  const color = colorFn(s.c, s.t);
+  ctx.globalAlpha = s.t === 'hl' ? hlAlpha : g.alpha == null ? 1 : g.alpha;
+  if (g.dot) { ctx.fillStyle = color; ctx.fill(g.path); }
+  else {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = g.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(g.path);
+  }
+  ctx.globalAlpha = 1;
 }
 
 /** Thumbnail of the top of the page (pageWidth × 1.2·pageWidth). Returns a PNG data URL or null. */
@@ -166,6 +210,7 @@ export class InkLayer {
     this.undoStack = [];
     this.redoStack = [];
     this.selection = null; // array of strokes
+    this.lifted = null; // Set of strokes being dragged (drawn on the overlay, not the strips)
     this.active = null;
     this.touches = new Map();
     this.ignored = new Set();
@@ -176,6 +221,12 @@ export class InkLayer {
     this._liveRaf = 0;
     this.cursor = null;
     this.hlAlpha = 0.32;
+    this.tiles = new Map();
+    this.tileScale = 0;
+    this.tw = TILE;
+    this.tilesEl = document.createElement('div');
+    this.tilesEl.className = 'ink-tiles';
+    this.wrap.append(this.tilesEl);
 
     const c = this.canvas;
     c.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -209,6 +260,8 @@ export class InkLayer {
     this.redoStack = [];
     this.clearSelection(false);
     this.history();
+    for (const t of this.tiles.values()) t.dirty = true;
+    this.syncBlend();
     this.render();
   }
   serialize() { return this.strokes; }
@@ -217,7 +270,7 @@ export class InkLayer {
   scaleAll(k) {
     for (const s of this.strokes) { for (let i = 0; i < s.p.length; i += 3) { s.p[i] = r1(s.p[i] * k); s.p[i + 1] = r1(s.p[i + 1] * k); } invalidate(s); }
     this.undoStack = []; this.redoStack = []; this.history();
-    this.render();
+    this.renderNow();
   }
 
   setEnabled(on) {
@@ -240,7 +293,8 @@ export class InkLayer {
       const W = Math.max(1, Math.round(w * this.dpr)), H = Math.max(1, Math.round(h * this.dpr));
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
     }
-    this.renderNow();
+    this._overlayDirty = true;
+    this.render();
     this.drawLive();
   }
   transform() {
@@ -257,29 +311,169 @@ export class InkLayer {
   }
 
   // ───────── rendering ─────────
+  // Committed strokes live in TILES: canvases inside the page that scroll natively with it, so
+  // scrolling never redraws handwriting. Only tiles coming into view are drawn (a few per frame),
+  // tiles far away are dropped to save memory. The viewport-sized #inkCanvas only shows the
+  // selection glow; #liveCanvas shows the stroke being drawn.
+  tileRes() { return Math.max(1, Math.min(this.dpr || 1, 3, 4096 / this.tw)); }
+  /** Logical (stroke-space) rectangle covered by a tile. */
+  tileRect(t) {
+    const s = this.tileScale;
+    return { x0: (t.i * this.tw) / s, y0: (t.j * TILE) / s, x1: ((t.i + 1) * this.tw) / s, y1: ((t.j + 1) * TILE) / s };
+  }
+  /** Schedule: create/draw tiles that came into view, refresh the selection overlay. */
   render() {
     if (this._raf) return;
-    this._raf = requestAnimationFrame(() => { this._raf = 0; this.renderNow(); });
+    this._raf = requestAnimationFrame(() => { this._raf = 0; this.updateTiles(6); this.renderOverlay(); });
   }
+  /** Redraw everything now (new note loaded, theme changed, undo…). */
   renderNow() {
+    for (const t of this.tiles.values()) t.dirty = true;
+    this.updateTiles(8); // on-screen strips now, the ones above/below over the next frames
+    this.renderOverlay();
+  }
+  /** Redraw only the tiles touched by these strokes (bounding boxes collected before and after a change). */
+  refreshBoxes(boxes) {
+    if (!boxes.length) return;
+    for (const t of this.tiles.values()) {
+      const r = this.tileRect(t);
+      if (boxes.some((b) => b.x1 >= r.x0 && b.x0 <= r.x1 && b.y1 >= r.y0 && b.y0 <= r.y1)) t.dirty = true;
+    }
+    this.render();
+  }
+  refreshStrokes(list) { this.refreshBoxes(list.map((x) => bbox(x))); }
+  neededTiles() {
+    const sc = this.scroller, s = this.view.getScale();
+    const W = this.wrap.offsetWidth, H = this.wrap.offsetHeight;
+    const wl = this.wrap.offsetLeft, wt = this.wrap.offsetTop;
+    const marginY = sc.clientHeight * 0.5;
+    const x0 = Math.max(0, sc.scrollLeft - wl), x1 = Math.min(W, sc.scrollLeft + sc.clientWidth - wl);
+    const y0 = Math.max(0, sc.scrollTop - wt - marginY), y1 = Math.min(H, sc.scrollTop + sc.clientHeight - wt + marginY);
+    const out = [];
+    if (x1 <= x0 || y1 <= y0 || !s) return out;
+    const v0 = sc.scrollTop - wt, v1 = v0 + sc.clientHeight; // on screen right now
+    for (let j = Math.floor(y0 / TILE); j <= Math.floor((y1 - 1) / TILE); j++)
+      for (let i = Math.floor(x0 / this.tw); i <= Math.floor((x1 - 1) / this.tw); i++) out.push([i, j, (j + 1) * TILE > v0 && j * TILE < v1]);
+    // nearest to the middle of the screen first
+    const cy = (sc.scrollTop - wt + sc.clientHeight / 2) / TILE;
+    out.sort((a, b) => Math.abs(a[1] + 0.5 - cy) - Math.abs(b[1] + 0.5 - cy));
+    return out;
+  }
+  /** budget = ms per frame for strips that aren't on screen yet (on-screen ones always finish). */
+  updateTiles(budget) {
+    const s = this.view.getScale();
+    const tw = Math.min(MAX_TW, Math.max(64, Math.ceil(this.wrap.offsetWidth)));
+    if (tw !== this.tw && s === this.tileScale) { this.dropTiles(); this.tw = tw; }
+    if (s !== this.tileScale) {
+      // Zoom / rotation: stretch the old tiles for a moment (smooth pinch), redraw crisp ones when it settles.
+      if (this.tiles.size && this.tileScale) {
+        this.tilesEl.style.transform = `scale(${s / this.tileScale})`;
+        clearTimeout(this._rescale);
+        this._rescale = setTimeout(() => { this.dropTiles(); this.tileScale = 0; this.tilesEl.style.transform = ''; this.render(); }, 160);
+        return;
+      }
+      this.dropTiles();
+      this.tileScale = s;
+      this.tw = tw;
+      this.tilesEl.style.transform = '';
+    }
+    const need = this.neededTiles();
+    const keep = new Set();
+    const deadline = performance.now() + budget;
+    let pending = false;
+    for (const [i, j, onScreen] of need) {
+      const key = i + ',' + j;
+      keep.add(key);
+      let t = this.tiles.get(key);
+      if (!t) { t = this.makeTile(i, j); this.tiles.set(key, t); }
+      if (t.dirty || t.queue) {
+        // strips on screen are finished now; those just ahead of the scroll a few ms per frame
+        if (onScreen) this.drawTile(t, Infinity);
+        else if (performance.now() < deadline) this.drawTile(t, deadline);
+        pending = pending || t.dirty || !!t.queue;
+      }
+    }
+    for (const [key, t] of this.tiles) if (!keep.has(key)) { this.freeTile(t); this.tiles.delete(key); }
+    if (pending) this.render(); // continue next frame
+  }
+  makeTile(i, j) {
+    const c = document.createElement('canvas');
+    const r = this.tileRes();
+    c.width = Math.round(this.tw * r);
+    c.height = Math.round(TILE * r);
+    c.style.cssText = `left:${i * this.tw}px;top:${j * TILE}px;width:${this.tw}px;height:${TILE}px`;
+    this.tilesEl.append(c);
+    return { i, j, canvas: c, ctx: c.getContext('2d'), dirty: true, queue: null, qi: 0, r };
+  }
+  /** Draw a strip, possibly over several frames: t.queue holds the strokes still to draw. */
+  drawTile(t, deadline) {
+    const ctx = t.ctx, s = this.tileScale, r = t.r;
+    if (t.dirty) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, t.canvas.width, t.canvas.height);
+      const R = this.tileRect(t);
+      const L = this.lifted;
+      t.queue = this.strokes.filter((st) => { if (L && L.has(st)) return false; const b = bbox(st); return !(b.x1 < R.x0 || b.x0 > R.x1 || b.y1 < R.y0 || b.y0 > R.y1); });
+      t.qi = 0;
+      t.dirty = false;
+    }
+    ctx.setTransform(s * r, 0, 0, s * r, -t.i * this.tw * r, -t.j * TILE * r);
+    const q = t.queue;
+    let k = t.qi;
+    while (k < q.length) {
+      drawStroke(ctx, q[k++], this.colorFn, this.hlAlpha);
+      if ((k & 15) === 0 && performance.now() > deadline) break;
+    }
+    if (k >= q.length) t.queue = null;
+    else t.qi = k;
+  }
+  // Zero-size the canvas so Safari gives the memory back now rather than at the next GC.
+  freeTile(t) { t.canvas.width = t.canvas.height = 0; t.canvas.remove(); }
+  dropTiles() { for (const t of this.tiles.values()) this.freeTile(t); this.tiles.clear(); }
+  /** Blending (highlighter that doesn't wash out text) costs a lot while scrolling: only on when needed. */
+  syncBlend() { this.tilesEl.classList.toggle('blend', this.strokes.some((x) => x.t === 'hl')); }
+  /** Free tile memory (note closed). */
+  release() { this.dropTiles(); this.tileScale = 0; }
+  /** End of a drag: the lifted strokes go back into the strips at their new place. */
+  drop() {
+    if (!this.lifted) return;
+    const list = [...this.lifted];
+    this.lifted = null;
+    this.refreshStrokes(list);
+  }
+  /** Selection glow on the viewport overlay; only drawn while something is selected. */
+  renderOverlay() {
     const ctx = this.ctx;
+    const hasSel = this.selection && this.selection.length;
+    if (!hasSel && !this._overlayDirty) { this.selBox.hidden = true; return; }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this._overlayDirty = !!hasSel;
     const T = this.transform();
-    ctx.setTransform(T.a, 0, 0, T.a, T.e, T.f);
-    const sel = this.selection ? new Set(this.selection) : null;
-    for (const s of this.strokes) {
-      const b = bbox(s);
-      if (b.x1 < T.x0 || b.x0 > T.x1 || b.y1 < T.y0 || b.y0 > T.y1) continue;
-      if (sel && sel.has(s)) {
-        ctx.save();
-        ctx.shadowColor = 'rgba(242,107,29,.85)';
-        ctx.shadowBlur = 6 * T.d;
-        drawStroke(ctx, s, this.colorFn, this.hlAlpha);
-        ctx.restore();
-      } else drawStroke(ctx, s, this.colorFn, this.hlAlpha);
+    if (hasSel) {
+      ctx.setTransform(T.a, 0, 0, T.a, T.e, T.f);
+      ctx.save();
+      ctx.shadowColor = 'rgba(242,107,29,.85)';
+      ctx.shadowBlur = 6 * T.d;
+      for (const st of this.selection) drawStroke(ctx, st, this.colorFn, this.hlAlpha);
+      ctx.restore();
+      if (this.lifted) for (const st of this.selection) drawStroke(ctx, st, this.colorFn, this.hlAlpha); // crisp on top of the glow
     }
     this.placeSelBox(T);
+  }
+  /** A just-finished stroke: draw it straight onto the tiles it touches (no redraw). */
+  drawOnTop(stroke) {
+    const b = bbox(stroke), s = this.tileScale;
+    if (stroke.t === 'hl') this.tilesEl.classList.add('blend');
+    if (!s) { this.render(); return; }
+    for (const t of this.tiles.values()) {
+      const R = this.tileRect(t);
+      if (b.x1 < R.x0 || b.x0 > R.x1 || b.y1 < R.y0 || b.y0 > R.y1 || t.dirty) continue;
+      if (t.queue) { t.queue.push(stroke); continue; } // still being drawn: keep the stacking order
+      t.ctx.setTransform(s * t.r, 0, 0, s * t.r, -t.i * this.tw * t.r, -t.j * TILE * t.r);
+      drawStroke(t.ctx, stroke, this.colorFn, this.hlAlpha);
+    }
+    this.render(); // the stroke may have grown the page: make sure new tiles exist
   }
   drawLive() {
     if (this._liveRaf) return;
@@ -292,7 +486,7 @@ export class InkLayer {
       const T = this.transform();
       ctx.setTransform(T.a, 0, 0, T.a, T.e, T.f);
       const a = this.active;
-      if (a && a.stroke) drawStroke(ctx, a.stroke, this.colorFn, this.hlAlpha);
+      if (a && a.stroke) drawStroke(ctx, a.stroke, this.colorFn, this.hlAlpha, false);
       if (a && a.kind === 'lasso' && a.poly.length > 2) {
         ctx.save();
         ctx.lineWidth = 1.5 / T.s;
@@ -391,7 +585,7 @@ export class InkLayer {
         this.clearSelection(false);
         this.active.kind = 'lasso';
         this.active.poly = [p.x, p.y];
-        this.renderNow();
+        this.renderOverlay();
       }
     } else {
       const s = { id: uid(10), t: tool, c: this.color, w: this.sizes[tool] || 3, p: [] };
@@ -455,6 +649,9 @@ export class InkLayer {
       const p = this.pt(e);
       const dx = p.x - a.last.x, dy = p.y - a.last.y;
       a.last = p; a.dx += dx; a.dy += dy;
+      // While dragging, the selection is "lifted" off the strips and drawn on the overlay only, so a
+      // drag costs one strip redraw at pick-up and one at drop instead of one per pointer move.
+      if (!this.lifted) { this.lifted = new Set(this.selection); this.refreshStrokes(this.selection); }
       this.translate(this.selection, dx, dy);
       this.render();
     }
@@ -486,7 +683,7 @@ export class InkLayer {
       if (cancelled && a.stroke.p.length < 9) { this.drawLive(); return; }
       this.strokes.push(a.stroke);
       this.push({ t: 'add', strokes: [a.stroke] });
-      this.renderNow();
+      this.drawOnTop(a.stroke);
       this.changed();
     } else if (a.kind === 'erase') {
       if (a.removed.length) { this.push({ t: 'erase', items: a.removed }); this.changed(); }
@@ -494,6 +691,7 @@ export class InkLayer {
     } else if (a.kind === 'lasso') {
       this.finishLasso(a.poly);
     } else if (a.kind === 'move') {
+      this.drop();
       if (Math.abs(a.dx) + Math.abs(a.dy) > 0.5) { this.push({ t: 'move', strokes: [...this.selection], dx: a.dx, dy: a.dy }); this.changed(); }
     }
     this.drawLive();
@@ -524,10 +722,15 @@ export class InkLayer {
     if (!this.active) return;
     const a = this.active;
     this.active = null;
+    if (a.kind === 'move' && this.selection) {
+      // interrupted (e.g. a second finger started a pinch): put the selection back where it was
+      this.translate(this.selection, -a.dx, -a.dy);
+      this.drop();
+    }
     if (a.kind === 'erase' && a.removed.length) {
       // restore what this gesture erased
       for (let i = a.removed.length - 1; i >= 0; i--) this.strokes.splice(a.removed[i].index, 0, a.removed[i].stroke);
-      this.renderNow();
+      this.refreshStrokes(a.removed.map((x) => x.stroke));
     }
     this.drawLive();
   }
@@ -608,14 +811,14 @@ export class InkLayer {
       if (hitStroke(s, x, y, r)) {
         this.strokes.splice(i, 1);
         this.active.removed.push({ stroke: s, index: i });
-        hit = true;
+        hit = (hit || []).concat(b);
       }
     }
-    if (hit) this.renderNow();
+    if (hit) this.refreshBoxes(hit);
   }
 
   finishLasso(poly) {
-    if (poly.length < 6) { this.renderNow(); return; }
+    if (poly.length < 6) { this.renderOverlay(); return; }
     const sel = [];
     for (const s of this.strokes) {
       const p = s.p, n = p.length / 3;
@@ -625,7 +828,8 @@ export class InkLayer {
       if (total && inside / total >= 0.5) sel.push(s);
     }
     this.selection = sel.length ? sel : null;
-    this.renderNow();
+    this._overlayDirty = true;
+    this.renderOverlay();
   }
   selBounds() {
     if (!this.selection || !this.selection.length) return null;
@@ -643,9 +847,11 @@ export class InkLayer {
     this.selBox.hidden = false;
   }
   clearSelection(render = true) {
+    this.drop();
     this.selection = null;
     this.selBox.hidden = true;
-    if (render) this.renderNow();
+    this._overlayDirty = true;
+    if (render) this.renderOverlay();
   }
   translate(list, dx, dy) {
     if (!list) return;
@@ -658,6 +864,7 @@ export class InkLayer {
     for (let i = this.strokes.length - 1; i >= 0; i--) if (set.has(this.strokes[i])) { removed.push({ stroke: this.strokes[i], index: i }); this.strokes.splice(i, 1); }
     this.push({ t: 'erase', items: removed });
     this.clearSelection();
+    this.refreshStrokes(removed.map((x) => x.stroke));
     this.changed();
   }
   duplicateSelection() {
@@ -666,7 +873,9 @@ export class InkLayer {
     this.strokes.push(...copies);
     this.push({ t: 'add', strokes: copies });
     this.selection = copies;
-    this.renderNow();
+    this.refreshStrokes(copies);
+    this._overlayDirty = true;
+    this.renderOverlay();
     this.changed();
   }
   recolorSelection() {
@@ -674,7 +883,8 @@ export class InkLayer {
     const items = this.selection.map((s) => ({ stroke: s, from: s.c }));
     for (const s of this.selection) s.c = this.color;
     this.push({ t: 'recolor', items, to: this.color });
-    this.renderNow();
+    this.refreshStrokes(this.selection);
+    this.renderOverlay();
     this.changed();
   }
   clearAll() {
@@ -684,6 +894,7 @@ export class InkLayer {
     this.strokes = [];
     this.push({ t: 'erase', items: removed });
     this.clearSelection();
+    this.renderNow();
     this.changed();
   }
 
@@ -706,5 +917,5 @@ export class InkLayer {
   }
   undo() { const op = this.undoStack.pop(); if (!op) return false; this.apply(op, -1); this.redoStack.push(op); this.after(); return true; }
   redo() { const op = this.redoStack.pop(); if (!op) return false; this.apply(op, 1); this.undoStack.push(op); this.after(); return true; }
-  after() { this.clearSelection(false); this.history(); this.renderNow(); this.changed(); }
+  after() { this.clearSelection(false); this.history(); this.syncBlend(); this.renderNow(); this.changed(); }
 }
