@@ -6,7 +6,7 @@ import { sanitizeHTML, htmlToText, firstImage, escapeHTML } from './sanitize.js'
 import { icon, hydrateIcons, setIcon } from './icons.js';
 import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog, promptDialog } from './ui.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -1370,6 +1370,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installEvent = e; });
 
 async function main() {
+  window.__inkLayer = ink; // handy from devtools (and used by the tests)
   hydrateIcons();
   await store.init();
   applyTheme();

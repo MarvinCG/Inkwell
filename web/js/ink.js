@@ -178,6 +178,8 @@ export class InkLayer {
     c.addEventListener('pointermove', (e) => this.onMove(e));
     c.addEventListener('pointerup', (e) => this.onUp(e, false));
     c.addEventListener('pointercancel', (e) => this.onUp(e, true));
+    c.addEventListener('lostpointercapture', (e) => { if (this.active && this.active.id === e.pointerId) this.onUp(e, false); });
+    c.addEventListener('touchstart', (e) => { if (this.enabled) e.preventDefault(); }, { passive: false });
     c.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch' && !this.active) { this.cursor = null; this.drawLive(); } });
     c.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -325,30 +327,41 @@ export class InkLayer {
 
     if (e.pointerType === 'touch') {
       e.preventDefault();
+      // First finger down means no other finger is on the glass: forget any touch whose lift event the
+      // browser never delivered (iPadOS drops some), so it can't make later touches look like two-finger scrolls.
+      if (e.isPrimary) this.resetTouches();
       this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.capture(e);
-      const palm = (e.width || 0) * (e.height || 0) > 3600; // ~60×60 CSS px contact = palm, not a finger
+      // Palm rejection only matters while a pen is in use. A finger's reported size varies a lot (iPad Safari
+      // reports it in coarse steps), so size is never used to throw away a touch when fingers draw.
       const penBusy = (this.active && this.active.pointerType === 'pen') || now - this.lastPen < 600;
-      if (palm || penBusy) { this.ignored.add(e.pointerId); this.touches.delete(e.pointerId); return; }
-      const fingers = this.touches.size;
-      if (this.penOnly || fingers > 1) {
-        if (this.active && this.active.pointerType === 'touch') this.cancelActive();
+      const palm = this.penOnly && Math.max(e.width || 0, e.height || 0) > 80;
+      if (penBusy || palm) { this.ignore(e.pointerId); return; }
+      if (this.penOnly) { this.startGesture(); return; }
+      if (this.touches.size > 1) {
+        const a = this.active;
+        // Writing for a moment already: a second contact is a resting knuckle or palm, not a gesture.
+        if (a && a.pointerType === 'touch' && a.kind === 'stroke' && now - a.t0 > 180 && a.stroke.p.length > 9) { this.ignore(e.pointerId); return; }
+        if (a && a.pointerType === 'touch') this.cancelActive(); // two fingers together: scroll / pinch
         this.startGesture();
         return;
       }
-      // finger drawing (pen-only off): falls through
+      // single finger, fingers draw: falls through
     } else if (e.pointerType === 'mouse') {
       if (e.button === 1) { e.preventDefault(); this.startMousePan(e); return; }
       if (e.button !== 0) return;
     }
 
+    // A primary pointer of the same kind going down while we think one is still drawing: that earlier
+    // pointer's lift was lost. Finish it instead of blocking all input.
+    if (this.active && e.isPrimary && this.active.pointerType === e.pointerType && this.active.id !== e.pointerId) this.finish(this.active, false);
     if (this.active) return; // one drawing pointer at a time
     e.preventDefault();
     this.capture(e);
     let tool = this.tool;
     if (e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) || (e.buttons & 2))) tool = 'eraser';
     const p = this.pt(e);
-    this.active = { id: e.pointerId, pointerType: e.pointerType, tool, kind: 'stroke' };
+    this.active = { id: e.pointerId, pointerType: e.pointerType, tool, kind: 'stroke', t0: now };
 
     if (tool === 'eraser') {
       this.active.kind = 'erase';
@@ -443,7 +456,12 @@ export class InkLayer {
     if (this.mousePan && e.pointerId === this.mousePan.id) { this.mousePan = null; return; }
     const a = this.active;
     if (!a || a.id !== e.pointerId) return;
-    this.active = null;
+    this.finish(a, cancelled, e.pointerType);
+  }
+
+  /** End the current tool action: commit the stroke / erase / lasso / move. */
+  finish(a, cancelled, pointerType = a.pointerType) {
+    if (this.active === a) this.active = null;
     if (a.kind === 'stroke') {
       if (cancelled && a.stroke.p.length < 9) { this.drawLive(); return; }
       this.strokes.push(a.stroke);
@@ -452,13 +470,21 @@ export class InkLayer {
       this.changed();
     } else if (a.kind === 'erase') {
       if (a.removed.length) { this.push({ t: 'erase', items: a.removed }); this.changed(); }
-      if (e.pointerType !== 'mouse') this.cursor = null;
+      if (pointerType !== 'mouse') this.cursor = null;
     } else if (a.kind === 'lasso') {
       this.finishLasso(a.poly);
     } else if (a.kind === 'move') {
       if (Math.abs(a.dx) + Math.abs(a.dy) > 0.5) { this.push({ t: 'move', strokes: [...this.selection], dx: a.dx, dy: a.dy }); this.changed(); }
     }
     this.drawLive();
+  }
+
+  ignore(id) { this.ignored.add(id); this.touches.delete(id); }
+  resetTouches() {
+    this.touches.clear();
+    this.ignored.clear();
+    this.gesture = null;
+    if (this.active && this.active.pointerType === 'touch') this.finish(this.active, false);
   }
 
   cancelActive() {
