@@ -1,5 +1,5 @@
 // Inkwell service worker: offline app shell. Bump VERSION when deploying changes.
-const VERSION = 'inkwell-1.1.0';
+const VERSION = 'inkwell-1.2.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/store.js', 'js/sync.js', 'js/github.js', 'js/ink.js', 'js/ui.js', 'js/icons.js', 'js/sanitize.js',

@@ -6,7 +6,7 @@ import { sanitizeHTML, htmlToText, firstImage, escapeHTML } from './sanitize.js'
 import { icon, hydrateIcons, setIcon } from './icons.js';
 import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog, promptDialog } from './ui.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -19,7 +19,7 @@ const el = {
   sizeRange: $('sizeRange'), sizeDot: $('sizeDot'), btnPenOnly: $('btnPenOnly'),
   stage: $('stage'), scroller: $('scroller'), wrap: $('pageWrap'), page: $('page'), title: $('noteTitle'), body: $('noteBody'),
   ink: $('inkCanvas'), live: $('liveCanvas'), selBox: $('selBox'),
-  zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomReset: $('zoomReset'),
+  zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomReset: $('zoomReset'), btnFull: $('btnFull'), fsHandle: $('fsHandle'),
   recBar: $('recBar'), recTime: $('recTime'), recStop: $('recStop'), recCancel: $('recCancel'),
   fileImage: $('fileImage'), fileImport: $('fileImport'), printArea: $('printArea'),
 };
@@ -453,11 +453,18 @@ function toLogical(cx, cy) { const r = el.wrap.getBoundingClientRect(); const s 
 
 let layoutRaf = 0;
 function requestLayout() { if (!layoutRaf) layoutRaf = requestAnimationFrame(() => { layoutRaf = 0; layout(); }); }
+/** Phone-sized touch screen (S26 Ultra in either orientation), not a tablet or laptop. */
+const isPhone = () => matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600;
 function layout() {
   if (el.editor.hidden) return;
   const pw = state.pageWidth;
-  const gutter = el.scroller.clientWidth < 600 ? 16 : 48;
-  state.fit = clamp((el.scroller.clientWidth - gutter) / pw, 0.3, 1.1);
+  const w = el.scroller.clientWidth;
+  // Full screen and phones: the page fills the width. Tablets/laptops: capped so text stays a sane size.
+  const fill = state.fs || isPhone();
+  const gutter = state.fs ? 0 : fill ? 8 : w < 600 ? 16 : 48;
+  const oldS = state.lastScale || 0;
+  const topLogical = oldS ? (el.scroller.scrollTop - el.wrap.offsetTop) / oldS : 0;
+  state.fit = clamp((w - gutter) / pw, 0.3, fill ? 4 : 1.1);
   const s = scale();
   el.page.style.width = pw + 'px';
   el.page.style.transform = `scale(${s})`;
@@ -467,6 +474,9 @@ function layout() {
   el.wrap.style.width = pw * s + 'px';
   el.wrap.style.height = h * s + 'px';
   el.zoomReset.textContent = Math.round(state.zoom * 100) + '%';
+  // Width changed (rotation, entering full screen): keep the same line of the note at the top.
+  if (oldS && Math.abs(oldS - s) > 1e-3 && !state.anchoring) el.scroller.scrollTop = Math.max(0, el.wrap.offsetTop + topLogical * s);
+  state.lastScale = s;
   ink.render();
 }
 function zoomTo(z, cx, cy, anchor) {
@@ -475,7 +485,9 @@ function zoomTo(z, cx, cy, anchor) {
   if (cx == null) { cx = sr.left + sr.width / 2; cy = sr.top + sr.height / 2; }
   const a = anchor || toLogical(cx, cy);
   state.zoom = z;
+  state.anchoring = true;
   layout();
+  state.anchoring = false;
   const s = scale();
   el.scroller.scrollLeft = el.wrap.offsetLeft + a.x * s - (cx - sr.left);
   el.scroller.scrollTop = el.wrap.offsetTop + a.y * s - (cy - sr.top);
@@ -527,6 +539,7 @@ function openNote(id, { isNew = false } = {}) {
   el.editor.hidden = false;
   try { if (!history.state || !history.state.editor) history.pushState({ editor: id }, ''); } catch { /* sandboxed preview */ }
   state.zoom = pref('zoom', 1);
+  state.lastScale = 0;
   ink.resize();
   layout();
   el.scroller.scrollTop = 0;
@@ -555,6 +568,7 @@ async function closeEditor() {
   const it = store.get(id);
   if (it && state.sessionNew && isEmptyData(it.data)) await store.put(tombstone(it));
   setMode(false);
+  exitFull();
   el.editor.hidden = true;
   state.current = null;
   state.draft = null;
@@ -600,6 +614,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 // ───────── modes ─────────
 function setMode(draw) {
+  if (draw && !state.drawing && !state.fs && fullPref() !== 'off' && !el.editor.hidden) enterFull();
   state.drawing = draw;
   el.editor.classList.toggle('drawing', draw);
   el.textToolbar.hidden = draw;
@@ -617,10 +632,95 @@ el.modeText.addEventListener('click', () => setMode(false));
 el.modeDraw.addEventListener('click', () => setMode(true));
 
 function updateUndo() {
-  if (state.drawing) {
-    el.btnUndo.disabled = !ink.undoStack.length;
-    el.btnRedo.disabled = !ink.redoStack.length;
-  } else { el.btnUndo.disabled = false; el.btnRedo.disabled = false; }
+  const u = state.drawing ? !ink.undoStack.length : false;
+  const r = state.drawing ? !ink.redoStack.length : false;
+  el.btnUndo.disabled = u;
+  el.btnRedo.disabled = r;
+  document.querySelectorAll('[data-fs="undo"]').forEach((b) => { b.disabled = u; });
+  document.querySelectorAll('[data-fs="redo"]').forEach((b) => { b.disabled = r; });
+}
+
+// ───────── full-screen writing ─────────
+// Hides the editor's top bar, puts every tool in one slim row (which can be tucked away), lets the page
+// fill the screen edge to edge, and — where the browser allows it (Chrome on Android) — hides Android's
+// status and navigation bars too.
+const canFullscreen = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+const fullPref = () => pref('fullscreen', isPhone() ? 'writing' : 'off'); // 'writing' | 'always' | 'off'
+function systemFullscreen() {
+  if (!canFullscreen || document.fullscreenElement) return;
+  document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+}
+function enterFull() {
+  if (el.editor.hidden) return;
+  state.fs = true;
+  el.editor.classList.add('fs');
+  el.btnFull.classList.add('on');
+  systemFullscreen();
+  layout();
+}
+function exitFull() {
+  if (!state.fs) return;
+  state.fs = false;
+  el.editor.classList.remove('fs', 'tools-hidden');
+  el.fsHandle.hidden = true;
+  el.btnFull.classList.remove('on');
+  if (document.fullscreenElement && fullPref() !== 'always') document.exitFullscreen().catch(() => {});
+  layout();
+}
+document.addEventListener('fullscreenchange', () => {
+  // Android back gesture / swipe leaves system full screen: leave the writing layout with it.
+  if (!document.fullscreenElement && state.fs && canFullscreen) exitFull();
+});
+// "Always": go full screen on the first tap of a session (browsers require a tap to allow it).
+document.addEventListener('click', () => { if (fullPref() === 'always') systemFullscreen(); }, true);
+function buildFullscreenBars() {
+  for (const bar of [el.textToolbar, el.drawToolbar]) {
+    const isDraw = bar === el.drawToolbar;
+    const g = document.createElement('span');
+    g.className = 'fs-only fs-group';
+    g.innerHTML = `<button type="button" class="tb" data-fs="exit" aria-label="Leave full screen" data-icon="collapse"></button>
+      <button type="button" class="tb" data-fs="mode" aria-label="${isDraw ? 'Switch to typing' : 'Switch to handwriting'}" data-icon="${isDraw ? 'type' : 'pen'}"></button>
+      <button type="button" class="tb" data-fs="undo" aria-label="Undo" data-icon="undo"></button>
+      <button type="button" class="tb" data-fs="redo" aria-label="Redo" data-icon="redo"></button>
+      <span class="tb-sep"></span>`;
+    bar.prepend(g);
+    if (isDraw) {
+      const cc = document.createElement('button');
+      cc.type = 'button';
+      cc.className = 'swatch fs-only fs-color';
+      cc.dataset.fs = 'color';
+      cc.setAttribute('aria-label', 'Color');
+      bar.querySelector('.colors').after(cc);
+    }
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.className = 'tb fs-only fs-hide';
+    hide.dataset.fs = 'hide';
+    hide.dataset.icon = 'chevronUp';
+    hide.setAttribute('aria-label', 'Hide tools');
+    bar.append(hide);
+    hydrateIcons(bar);
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fs]');
+      if (!b) return;
+      e.stopPropagation();
+      const a = b.dataset.fs;
+      if (a === 'exit') exitFull();
+      else if (a === 'mode') setMode(!state.drawing);
+      else if (a === 'undo') el.btnUndo.click();
+      else if (a === 'redo') el.btnRedo.click();
+      else if (a === 'hide') { el.editor.classList.add('tools-hidden'); el.fsHandle.hidden = false; }
+      else if (a === 'color') {
+        showMenu(b, [
+          { head: 'Color' },
+          { swatches: PALETTE, onPick: (c) => selectColor(c) },
+          { label: 'Custom color…', icon: 'edit', onClick: () => el.customColor.click() },
+        ], { align: 'start' });
+      }
+    });
+  }
+  el.fsHandle.addEventListener('click', () => { el.editor.classList.remove('tools-hidden'); el.fsHandle.hidden = true; });
+  el.btnFull.addEventListener('click', () => (state.fs ? exitFull() : enterFull()));
 }
 el.btnUndo.addEventListener('mousedown', (e) => e.preventDefault());
 el.btnRedo.addEventListener('mousedown', (e) => e.preventDefault());
@@ -918,6 +1018,7 @@ function selectColor(c) {
   setPref('color', c);
   el.swatches.querySelectorAll('.swatch').forEach((b) => b.classList.toggle('active', b.dataset.color === c));
   el.customColor.parentElement.classList.toggle('active', !PALETTE.includes(c));
+  document.querySelectorAll('.fs-color').forEach((b) => { b.style.background = c; });
   if (ink.tool === 'eraser' || ink.tool === 'lasso') { if (!ink.selection) selectTool('pen'); }
   updateSizeDot();
 }
@@ -1087,6 +1188,10 @@ async function openSettings(focus) {
       <div class="section">
         <h3>Pen &amp; touch</h3>
         ${choice('penMode', [['auto', 'Auto'], ['on', 'Pen only'], ['off', 'Fingers draw too']], penMode)}
+        <div style="height:10px"></div>
+        <span style="display:block;font-size:13px;color:var(--text-2);margin:6px 0 8px">Full screen</span>
+        ${choice('fullscreen', [['writing', 'While writing'], ['always', 'Always'], ['off', 'Off']], fullPref())}
+        <p class="hint">Full screen hides the note's top bar and Android's status and navigation bars, so the page uses the whole display. Swipe in from the edge to see the bars; the back gesture leaves full screen. The ⤢ button in a note toggles it any time.</p>
         <p class="hint">Auto switches to “pen only” the first time an S Pen or Apple Pencil touches the page: then fingers scroll and pinch-zoom, and your palm is ignored. Holding the S Pen button (or flipping to an eraser end) erases.</p>
       </div>
       <div class="section">
@@ -1118,6 +1223,7 @@ async function openSettings(focus) {
         if (r.dataset.choice === 'theme') { setPref('theme', b.dataset.v).then(applyTheme); }
         if (r.dataset.choice === 'penMode') { setPref('penMode', b.dataset.v).then(applyPenMode); }
         if (r.dataset.choice === 'syncMode') showPanes(b.dataset.v);
+        if (r.dataset.choice === 'fullscreen') { setPref('fullscreen', b.dataset.v); if (b.dataset.v === 'always') systemFullscreen(); else if (b.dataset.v === 'off' && document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
       }));
       d.querySelector('#sTest').addEventListener('click', async () => {
         const f = readSyncForm(d);
@@ -1238,7 +1344,12 @@ document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName) || (document.activeElement && document.activeElement.isContentEditable);
   if (e.key === 'Escape') {
     if (closeMenu()) return;
-    if (!el.editor.hidden) { if (state.drawing && ink.selection) ink.clearSelection(); else el.btnBack.click(); }
+    if (!el.editor.hidden) {
+      if (state.drawing && ink.selection) ink.clearSelection();
+      else if (state.fs && el.editor.classList.contains('tools-hidden')) el.fsHandle.click();
+      else if (state.fs && !document.fullscreenElement) exitFull();
+      else el.btnBack.click();
+    }
     else if (el.sidebar.classList.contains('open')) openDrawer(false);
     return;
   }
@@ -1263,6 +1374,7 @@ async function main() {
   await store.init();
   applyTheme();
   buildSwatches();
+  buildFullscreenBars();
   const sizes = pref('sizes', null);
   if (sizes) Object.assign(ink.sizes, DEFAULT_SIZES, sizes);
   selectColor(pref('color', PALETTE[0]));

@@ -379,6 +379,37 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
   .tool { min-width: 38px; padding: 0 6px; }
 }
 
+/* ───────── Full-screen writing ───────── */
+.fs-only { display: none !important; }
+.editor-view.fs .fs-only { display: inline-flex !important; }
+.fs-group { align-items: center; gap: 2px; flex: none; }
+.editor-view.fs .editor-bar { display: none; }
+/* One slim row: every tool fits on the S26 in landscape; in portrait it wraps to two short rows. */
+.editor-view.fs .toolbar {
+  flex-wrap: nowrap !important; overflow-x: auto !important; row-gap: 2px;
+  padding-top: max(3px, env(safe-area-inset-top)); padding-bottom: 3px;
+  box-shadow: 0 1px 0 var(--border);
+}
+.editor-view.fs .draw-toolbar { flex-wrap: wrap !important; overflow: visible !important; }
+.editor-view.fs .draw-toolbar .colors { display: none; }
+.editor-view.fs .draw-toolbar .tb-sep { display: block; }
+.editor-view.fs .draw-toolbar .tb.pill { margin-left: 0; padding: 0 9px; }
+.editor-view.fs .pill-label { display: none; }
+.editor-view.fs .size-ctl input { width: 80px; }
+.editor-view.fs .fs-color { margin: 0 4px; }
+.editor-view.fs .fs-hide { margin-left: auto; }
+.editor-view.fs.tools-hidden .toolbar { display: none !important; }
+.editor-view.fs .zoom-ctl { display: none; }
+.editor-view.fs .page { box-shadow: none; }
+.editor-view.fs .page-wrap { margin-top: 0; }
+.editor-view.fs .stage { background: var(--paper); }
+.fs-handle {
+  position: absolute; z-index: 6; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px);
+  width: 40px; height: 40px; border: 0; border-radius: 12px; cursor: pointer;
+  background: var(--surface); color: var(--text-2); box-shadow: var(--shadow); opacity: .9;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
 /* ───────── Menu, toast, dialog ───────── */
 .menu {
   position: fixed; z-index: 100; min-width: 210px; max-width: min(92vw, 320px); max-height: 70vh; overflow-y: auto;
