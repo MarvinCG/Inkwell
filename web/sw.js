@@ -1,8 +1,8 @@
 // Inkwell service worker: offline app shell. Bump VERSION when deploying changes.
-const VERSION = 'inkwell-1.2.1';
+const VERSION = 'inkwell-1.3.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
-  'js/app.js', 'js/store.js', 'js/sync.js', 'js/github.js', 'js/ink.js', 'js/ui.js', 'js/icons.js', 'js/sanitize.js',
+  'js/app.js', 'js/store.js', 'js/sync.js', 'js/github.js', 'js/ink.js', 'js/ui.js', 'js/icons.js', 'js/sanitize.js', 'js/pdf.js', 'vendor/html2canvas.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 

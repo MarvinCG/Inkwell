@@ -5,8 +5,9 @@ import { InkLayer, PALETTE, DEFAULT_SIZES, renderThumb, drawStroke, bbox } from 
 import { sanitizeHTML, htmlToText, firstImage, escapeHTML } from './sanitize.js';
 import { icon, hydrateIcons, setIcon } from './icons.js';
 import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog, promptDialog } from './ui.js';
+import { notePDF } from './pdf.js';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -795,10 +796,17 @@ function updateToolbarState() {
     b.classList.toggle('active', on);
   }
 }
-function closestInBody(selector) {
+/** Element at the caret. When the caret sits between elements (e.g. in an empty note) use the child it points at. */
+function caretElement() {
   const sel = document.getSelection();
-  if (!sel || !sel.anchorNode) return null;
-  const n = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  let n = r.startContainer;
+  if (n.nodeType === 1 && n.childNodes.length) n = n.childNodes[Math.min(r.startOffset, n.childNodes.length - 1)];
+  return n && (n.nodeType === 1 ? n : n.parentElement);
+}
+function closestInBody(selector) {
+  const n = caretElement();
   const hit = n && n.closest(selector);
   return hit && el.body.contains(hit) ? hit : null;
 }
@@ -809,8 +817,9 @@ function toggleChecklist() {
   const ul = closestInBody('ul');
   if (ul) ul.classList.add('checklist');
   else {
+    const before = new Set(el.body.querySelectorAll('ul'));
     document.execCommand('insertUnorderedList');
-    const nu = closestInBody('ul');
+    const nu = closestInBody('ul') || [...el.body.querySelectorAll('ul')].find((u) => !before.has(u));
     if (nu) nu.classList.add('checklist');
   }
   markDirty();
@@ -1041,12 +1050,35 @@ el.sizeRange.addEventListener('input', () => {
   setPref('sizes', ink.sizes);
   updateSizeDot();
 });
-function applyPenMode() {
-  const mode = pref('penMode', 'auto');
-  ink.penOnly = mode === 'on' || (mode === 'auto' && pref('penSeen', false));
-  el.btnPenOnly.setAttribute('aria-pressed', String(ink.penOnly));
+const TOUCH_MODES = {
+  pen: { label: 'Pen only', icon: 'pen', menu: 'Pen only — fingers scroll (S Pen, Apple Pencil)' },
+  stylus: { label: 'Hand rest', icon: 'stylus', menu: 'Hand rest — simple stylus or fingertip, palm ignored' },
+  fingers: { label: 'Fingers', icon: 'hand', menu: 'Fingers — every touch draws' },
+};
+/** Chosen touch mode: 'auto' | 'pen' | 'stylus' | 'fingers' (older versions stored penMode on/off/auto). */
+function touchSetting() {
+  const m = pref('touchMode', null);
+  if (m) return m;
+  const old = pref('penMode', 'auto');
+  return old === 'on' ? 'pen' : old === 'off' ? 'stylus' : 'auto';
 }
-el.btnPenOnly.addEventListener('click', () => { setPref('penMode', ink.penOnly ? 'off' : 'on'); applyPenMode(); toast(ink.penOnly ? 'Pen only: fingers scroll and zoom' : 'Fingers draw too (two fingers scroll)'); });
+function applyPenMode() {
+  const m = touchSetting();
+  ink.touchMode = m === 'auto' ? (pref('penSeen', false) ? 'pen' : 'stylus') : m;
+  const t = TOUCH_MODES[ink.touchMode];
+  el.btnPenOnly.dataset.mode = ink.touchMode;
+  el.btnPenOnly.title = t.menu;
+  el.btnPenOnly.querySelector('.pill-label').textContent = t.label;
+  setIcon(el.btnPenOnly.querySelector('.ico'), t.icon);
+}
+el.btnPenOnly.addEventListener('click', () => {
+  const cur = ink.touchMode;
+  const pick = (m) => { setPref('touchMode', m); applyPenMode(); };
+  showMenu(el.btnPenOnly, [
+    { head: 'Touch while writing' },
+    ...Object.entries(TOUCH_MODES).map(([k, v]) => ({ label: v.menu, icon: v.icon, checked: cur === k, onClick: () => pick(k) })),
+  ]);
+});
 function penDetected() {
   if (pref('penSeen', false)) return;
   setPref('penSeen', true);
@@ -1064,7 +1096,8 @@ el.btnNoteMenu.addEventListener('click', () => {
     { label: 'Insert image', icon: 'image', onClick: () => { setMode(false); restoreSelection(); el.fileImage.click(); } },
     { label: 'Record voice', icon: 'mic', onClick: () => { setMode(false); startRecording(); } },
     'sep',
-    { label: 'Export PDF / print', icon: 'print', onClick: printNote },
+    { label: 'Export PDF', icon: 'download', onClick: exportPDF },
+    IS_IOS ? null : { label: 'Print', icon: 'print', onClick: printNote },
     navigator.share ? { label: 'Share as text', icon: 'upload', onClick: shareNote } : null,
     { label: 'Duplicate', icon: 'copy', onClick: async () => { state.editorDirty = true; await saveNow(); if (store.get(state.current)) duplicateNote(state.current); } },
     { label: 'Clear handwriting', icon: 'eraser', disabled: !ink.strokes.length, onClick: () => { ink.clearAll(); toast('Handwriting cleared', { action: 'Undo', onAction: () => ink.undo() }); } },
@@ -1110,6 +1143,48 @@ async function pageStyleDialog() {
   state.editorDirty = true;
   layout();
   await saveNow();
+}
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+}
+/** Build the PDF here (iPad home-screen apps can't print), then share it or save it. */
+async function exportPDF() {
+  state.editorDirty = true;
+  await saveNow();
+  const it = store.get(state.current) || state.draft;
+  const title = el.title.value.trim() || (it ? noteTitle(it) : 'Note');
+  toast('Making the PDF…', { ms: 60000 });
+  let blob;
+  try {
+    blob = await notePDF({ pageEl: el.page, title: el.title.value.trim(), strokes: ink.strokes, pageWidth: state.pageWidth });
+  } catch (e) {
+    console.error(e);
+    toast(`Couldn’t make the PDF: ${e.message}`, IS_IOS ? {} : { action: 'Print instead', onAction: printNote });
+    return;
+  }
+  document.getElementById('toast').hidden = true;
+  const name = `${title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Note'}.pdf`;
+  const file = new File([blob], name, { type: 'application/pdf' });
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  const kb = blob.size > 1048576 ? `${(blob.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+  await dialog({
+    title: 'PDF ready',
+    html: `<p style="margin:0;line-height:1.5;color:var(--text-2)">${escapeHTML(name)} · ${kb}${canShare ? '<br>Share opens the system sheet: Save to Files, Print, AirDrop, Mail…' : ''}</p>`,
+    actions: [
+      { label: 'Close', value: null },
+      ...(canShare && !IS_IOS ? [{ label: 'Download', value: () => downloadBlob(blob, name) }] : []),
+      canShare
+        // share() runs inside the tap itself, which iPadOS requires
+        ? { label: 'Share / Save', primary: true, value: () => navigator.share({ files: [file], title }).catch((e) => { if (e.name !== 'AbortError') downloadBlob(blob, name); }) }
+        : { label: 'Download', primary: true, value: () => downloadBlob(blob, name) },
+    ],
+  });
 }
 async function shareNote() {
   await saveNow();
@@ -1160,7 +1235,7 @@ async function openSettings(focus) {
   const persisted = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted().catch(() => false) : false;
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  const theme = pref('theme', 'system'), penMode = pref('penMode', 'auto');
+  const theme = pref('theme', 'system');
   const choice = (name, opts, cur) => `<div class="choice-row" data-choice="${name}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${v === cur ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   const statusText = st === 'off' ? 'Not set up — notes are only on this device.'
     : st === 'ok' ? `Connected · last sync ${timeAgo(pref('lastSyncAt'))}` : st === 'syncing' ? 'Syncing…' : sync.message || st;
@@ -1187,12 +1262,12 @@ async function openSettings(focus) {
       </div>
       <div class="section">
         <h3>Pen &amp; touch</h3>
-        ${choice('penMode', [['auto', 'Auto'], ['on', 'Pen only'], ['off', 'Fingers draw too']], penMode)}
+        ${choice('touchMode', [['auto', 'Auto'], ['pen', 'Pen only'], ['stylus', 'Hand rest'], ['fingers', 'Fingers']], touchSetting())}
         <div style="height:10px"></div>
         <span style="display:block;font-size:13px;color:var(--text-2);margin:6px 0 8px">Full screen</span>
         ${choice('fullscreen', [['writing', 'While writing'], ['always', 'Always'], ['off', 'Off']], fullPref())}
         <p class="hint">Full screen hides the note's top bar and Android's status and navigation bars, so the page uses the whole display. Swipe in from the edge to see the bars; the back gesture leaves full screen. The ⤢ button in a note toggles it any time.</p>
-        <p class="hint">Auto switches to “pen only” the first time an S Pen or Apple Pencil touches the page: then fingers scroll and pinch-zoom, and your palm is ignored. Holding the S Pen button (or flipping to an eraser end) erases.</p>
+        <p class="hint"><b>Pen only</b>: only an S Pen or Apple Pencil draws; fingers scroll and pinch-zoom. <b>Hand rest</b>: a simple (non-smart) stylus or fingertip draws and a resting palm is ignored. <b>Fingers</b>: every touch draws, even a flat finger. <b>Auto</b> uses Hand rest until an S Pen or Apple Pencil touches the page, then Pen only. Two fingers together always scroll and zoom; holding the S Pen button erases.</p>
       </div>
       <div class="section">
         <h3>Appearance</h3>
@@ -1221,7 +1296,7 @@ async function openSettings(focus) {
         const b = e.target.closest('[data-v]'); if (!b) return;
         r.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
         if (r.dataset.choice === 'theme') { setPref('theme', b.dataset.v).then(applyTheme); }
-        if (r.dataset.choice === 'penMode') { setPref('penMode', b.dataset.v).then(applyPenMode); }
+        if (r.dataset.choice === 'touchMode') { setPref('touchMode', b.dataset.v).then(applyPenMode); }
         if (r.dataset.choice === 'syncMode') showPanes(b.dataset.v);
         if (r.dataset.choice === 'fullscreen') { setPref('fullscreen', b.dataset.v); if (b.dataset.v === 'always') systemFullscreen(); else if (b.dataset.v === 'off' && document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
       }));

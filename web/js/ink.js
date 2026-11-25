@@ -158,7 +158,11 @@ export class InkLayer {
     this.tool = 'pen';
     this.color = PALETTE[0];
     this.sizes = { ...DEFAULT_SIZES };
-    this.penOnly = false;
+    // How touches (fingers, simple capacitive styluses) behave in handwriting mode:
+    //   'pen'     only an active pen (S Pen, Apple Pencil) draws; fingers scroll and zoom
+    //   'stylus'  "hand rest": a fingertip or simple stylus draws, large contacts (a resting palm) are ignored
+    //   'fingers' every touch draws, whatever its size
+    this.touchMode = 'stylus';
     this.undoStack = [];
     this.redoStack = [];
     this.selection = null; // array of strokes
@@ -195,6 +199,8 @@ export class InkLayer {
       else if (act === 'recolor') this.recolorSelection();
     });
   }
+
+  get penOnly() { return this.touchMode === 'pen'; }
 
   // ───────── state ─────────
   load(strokes) {
@@ -335,18 +341,26 @@ export class InkLayer {
       // Palm rejection only matters while a pen is in use. A finger's reported size varies a lot (iPad Safari
       // reports it in coarse steps), so size is never used to throw away a touch when fingers draw.
       const penBusy = (this.active && this.active.pointerType === 'pen') || now - this.lastPen < 600;
-      const palm = this.penOnly && Math.max(e.width || 0, e.height || 0) > 80;
-      if (penBusy || palm) { this.ignore(e.pointerId); return; }
-      if (this.penOnly) { this.startGesture(); return; }
+      if (penBusy || this.isPalm(e)) { this.ignore(e.pointerId); return; }
+      if (this.touchMode === 'pen') { this.startGesture(); return; }
       if (this.touches.size > 1) {
         const a = this.active;
-        // Writing for a moment already: a second contact is a resting knuckle or palm, not a gesture.
-        if (a && a.pointerType === 'touch' && a.kind === 'stroke' && now - a.t0 > 180 && a.stroke.p.length > 9) { this.ignore(e.pointerId); return; }
-        if (a && a.pointerType === 'touch') this.cancelActive(); // two fingers together: scroll / pinch
-        this.startGesture();
-        return;
+        if (a && a.pointerType === 'touch' && a.kind === 'stroke') {
+          const writing = this.extent(a.stroke) > 6 / this.view.getScale();
+          if (writing && now - a.t0 > 180) { this.ignore(e.pointerId); return; } // resting knuckle/palm while writing
+          if (!writing && this.touchMode === 'stylus') {
+            // The first contact sat still (side of the hand): hand the stroke over to the new touch.
+            const old = a.id;
+            this.cancelActive();
+            this.ignore(old);
+          } else { this.cancelActive(); this.startGesture(); return; } // two fingers together: scroll / pinch
+        } else {
+          if (a && a.pointerType === 'touch') this.cancelActive();
+          this.startGesture();
+          return;
+        }
       }
-      // single finger, fingers draw: falls through
+      // one drawing touch: falls through
     } else if (e.pointerType === 'mouse') {
       if (e.button === 1) { e.preventDefault(); this.startMousePan(e); return; }
       if (e.button !== 0) return;
@@ -420,6 +434,12 @@ export class InkLayer {
       if (!a && e.pointerType !== 'touch' && this.tool === 'eraser') { this.cursor = this.pt(e); this.drawLive(); }
       return;
     }
+    if (e.pointerType === 'touch' && this.isPalm(e)) {
+      // A contact that spreads out while moving is a palm settling down, not the stylus.
+      if (performance.now() - a.t0 < 400) this.cancelActive(); else this.finish(a, false);
+      this.ignore(e.pointerId);
+      return;
+    }
     const evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
     if (a.kind === 'stroke') {
       for (const ev of evs) { const p = this.view.toLogical(ev.clientX, ev.clientY); this.addPoint(p.x, p.y, this.pressure(ev)); }
@@ -480,6 +500,19 @@ export class InkLayer {
   }
 
   ignore(id) { this.ignored.add(id); this.touches.delete(id); }
+  /** Hand-rest mode: a contact bigger than ~60×60 px is a palm (same rule as v1.1). Pen-only: only very big ones. */
+  isPalm(e) {
+    const w = e.width || 0, h = e.height || 0;
+    if (this.touchMode === 'stylus') return w * h > 3600;
+    if (this.touchMode === 'pen') return Math.max(w, h) > 80;
+    return false;
+  }
+  extent(s) {
+    const p = s.p;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < p.length; i += 3) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]); }
+    return p.length ? Math.max(x1 - x0, y1 - y0) : 0;
+  }
   resetTouches() {
     this.touches.clear();
     this.ignored.clear();

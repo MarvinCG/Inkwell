@@ -13,6 +13,7 @@ A Samsung Notes–style app for the web: typed notes and handwriting on the same
 **Sync:** your private repository [`MarvinCG/inkwell-data`](https://github.com/MarvinCG/inkwell-data). Every device keeps a full offline copy; changes travel through that repo.
 
 ```
+web/vendor html2canvas 1.4.1 (MIT) — renders the page for PDF export
 web/       the app (HTML/CSS/JS, no build step, no dependencies) — what GitHub Pages publishes
 server/    optional self-hosted sync server (Node, zero dependencies) — not needed with GitHub sync
 .github/   Pages deploy workflow
@@ -54,13 +55,17 @@ Notes you wrote before setting up sync are uploaded on the first sync.
 - **+** makes a note. **T / pen** at the top switches between typing and handwriting.
 - **Typing**: bold/italic/underline/strike, H1/H2, checklists (tap the box), bullets, numbers, text color, highlight, alignment, photos, voice recordings, dividers. On iPad, Apple Pencil *Scribble* turns handwriting into typed text while in typing mode.
 - **Handwriting**: pen (pressure-sensitive), pencil, highlighter, eraser (removes whole strokes), lasso (select → drag to move, duplicate, recolor, delete). 12 colors + custom, size slider, undo/redo.
-- **Pen only / palm rejection**: the first time an S Pen or Apple Pencil touches the page, Inkwell switches to *pen only*: fingers scroll and pinch-zoom, your palm is ignored. Toggle it with the hand button, or in Settings. With S Pen, hold the side button while writing to erase.
+- **Touch while writing** (button at the end of the pen toolbar, or Settings → Pen & touch):
+  - *Pen only* — only an S Pen or Apple Pencil draws; fingers scroll and pinch-zoom; your palm is ignored.
+  - *Hand rest* — a simple (non-smart) capacitive stylus or a fingertip draws while you rest your hand; large contacts (a palm) are ignored, including a palm that spreads out as it settles or the side of the hand sitting still.
+  - *Fingers* — every touch draws, even a flat finger.
+  - *Auto* (default) uses Hand rest until an S Pen or Apple Pencil touches the page, then Pen only. Two fingers together always scroll and zoom. With S Pen, hold the side button while writing to erase.
 - **Full screen** (⤢ in a note, or Settings → Full screen): hides the note's top bar and Android's status and navigation bars, the page fills the display, and all tools sit in one slim row (tap ⌃ to tuck them away). On phones it turns on automatically when you start handwriting; *Always* keeps the whole app full screen. The back gesture leaves full screen.
 - **Zoom**: −/100%/+ buttons, pinch (pen-only mode), Ctrl + mouse wheel / touchpad pinch on the laptop.
 - **Page style** (⋮ menu): blank, lined, grid or dotted; white, cream, mint or sky paper; narrow (phone) or wide (tablet/laptop) page. A note keeps its page width on every device, so handwriting stays exactly where you wrote it next to the text — a note made on the laptop opens zoomed out on the phone, like Samsung Notes.
 - **Organize**: folders with colors, favorites (★), sort by modified/created/title, grid or list view, search across titles and text. Long-press (or right-click) a note for quick actions.
 - **Trash**: notes stay 30 days, restorable, then are deleted for good.
-- **Export**: ⋮ → *Export PDF / print* (choose “Save as PDF”), *Share as text*, and **Settings → Export backup** (one JSON file; *Import backup* merges it back).
+- **Export**: ⋮ → *Export PDF* builds an A4 PDF in the app (text, photos, checklists and handwriting; pages break between lines) and opens the share sheet — *Save to Files*, *Print*, AirDrop, Mail — or downloads it on the laptop. ⋮ → *Print* (laptop/Android), *Share as text*, and **Settings → Export backup** (one JSON file; *Import backup* merges it back).
 - **Keyboard** (laptop): `N` new note, `/` search, `Esc` back, `Ctrl+Alt+D` typing ↔ handwriting, `Ctrl+Z / Ctrl+Y` undo/redo handwriting, `Delete` removes a lasso selection.
 - **Dark mode** follows the system (or set it in Settings). Black ink shows as white on dark paper.
 
@@ -99,6 +104,7 @@ Push changes to `main` (bump `VERSION` in `web/sw.js` so installed apps pick the
 
 ## Limits
 
+- PDFs are images of the pages (sharp, but the text isn't selectable); voice notes appear as a label.
 - Handwriting isn't converted to searchable text (iPad Scribble works only while typing). No shape recognition or PDF annotation yet.
 - Photos are compressed to 1600 px JPEG; voice notes are capped at 15 minutes. Media of deleted notes stays in `inkwell-data`'s history.
 - Voice notes recorded on Android are WebM/Opus when Chrome can't record MP4; older iPadOS versions may not play those.
