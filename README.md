@@ -68,6 +68,7 @@ Notes you wrote before setting up sync are uploaded on the first sync.
 - **Export**: ⋮ → *Export PDF* builds an A4 PDF in the app (text, photos, checklists and handwriting; pages break between lines) and opens the share sheet — *Save to Files*, *Print*, AirDrop, Mail — or downloads it on the laptop. ⋮ → *Print* (laptop/Android), *Share as text*, and **Settings → Export backup** (one JSON file; *Import backup* merges it back).
 - **Keyboard** (laptop): `N` new note, `/` search, `Esc` back, `Ctrl+Alt+D` typing ↔ handwriting, `Ctrl+Z / Ctrl+Y` undo/redo handwriting, `Delete` removes a lasso selection.
 - **Dark mode** follows the system (or set it in Settings). Black ink shows as white on dark paper.
+- **Liquid glass**: toolbars and buttons are glass capsules floating over your notes, in the spirit of Apple's [Liquid Glass](https://developer.apple.com/design/human-interface-guidelines/materials). The page scrolls underneath them. In Chrome and Edge (S26, ThinkPad) the glass also bends what's behind its edges. Safari can't draw that, so on the iPad it's frosted glass. **Settings → Appearance → Controls → Solid** switches to opaque controls (less battery), as does the system's *Reduce transparency*.
 
 ## How GitHub sync works
 

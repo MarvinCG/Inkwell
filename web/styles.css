@@ -505,3 +505,206 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
   .print-area .page { position: relative; transform: none !important; box-shadow: none; background: #fff !important; color: #000; --paper: #fff !important; --paper-line: #dfe6ef !important; }
   .print-area .ink-img { position: absolute; left: 0; top: 0; pointer-events: none; }
 }
+
+/* ═════════════════════════ Liquid Glass ═════════════════════════
+   Controls float over the content in glass capsules; content (cards, the page) stays solid.
+   Material: translucent tint + backdrop blur/saturation, a light sheen that follows the pointer,
+   specular rims (top-left and bottom-right), soft shadow. On Chromium, js/glass.js swaps the blur
+   for an SVG lens that also bends the content at the rim. "Solid" in Settings (or the system's
+   Reduce transparency) turns it all into opaque surfaces. */
+:root {
+  --glass: rgba(255, 255, 255, .5);
+  --glass-thick: rgba(251, 250, 248, .8);
+  --glass-sheen: rgba(255, 255, 255, .75);
+  --glass-sheen-lit: rgba(255, 255, 255, 1);
+  --glass-rim: rgba(255, 255, 255, .95);
+  --glass-rim-2: rgba(255, 255, 255, .4);
+  --glass-line: rgba(60, 40, 20, .08);
+  --glass-press: rgba(255, 255, 255, .55);
+  --glass-shadow: 0 8px 26px rgba(40, 25, 10, .13), 0 1px 3px rgba(40, 25, 10, .08);
+  --seg-thumb: rgba(255, 255, 255, .9);
+  --edge: var(--bg);
+}
+:root[data-theme="dark"] {
+  --glass: rgba(46, 46, 48, .5);
+  --glass-thick: rgba(34, 34, 36, .82);
+  --glass-sheen: rgba(255, 255, 255, .16);
+  --glass-sheen-lit: rgba(255, 255, 255, .32);
+  --glass-rim: rgba(255, 255, 255, .38);
+  --glass-rim-2: rgba(255, 255, 255, .1);
+  --glass-line: rgba(0, 0, 0, .5);
+  --glass-press: rgba(255, 255, 255, .16);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .45);
+  --seg-thumb: rgba(255, 255, 255, .16);
+}
+.glass {
+  --sheen: var(--glass-sheen);
+  --tint: var(--glass);
+  background: radial-gradient(130% 150% at var(--lx, 22%) var(--ly, -20%), var(--sheen) 0%, transparent 48%), var(--tint);
+  -webkit-backdrop-filter: blur(14px) saturate(1.8);
+  backdrop-filter: blur(14px) saturate(1.8);
+  box-shadow:
+    inset 1.5px 1.5px 1px -1px var(--glass-rim),
+    inset -1.5px -1.5px 1px -1px var(--glass-rim-2),
+    inset 0 0 0 1px var(--glass-rim-2),
+    0 0 0 .5px var(--glass-line),
+    var(--glass-shadow);
+  border: 0;
+}
+.glass.lit { --sheen: var(--glass-sheen-lit); }
+.glass.thick { --tint: var(--glass-thick); -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); }
+.glass.dark {
+  --tint: rgba(28, 26, 24, .66); --sheen: rgba(255, 255, 255, .14);
+  box-shadow: inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, .35), inset 0 0 0 1px rgba(255, 255, 255, .08), var(--glass-shadow);
+}
+.glass.tinted {
+  --tint: color-mix(in srgb, var(--accent) 84%, transparent); --sheen: rgba(255, 255, 255, .55);
+  box-shadow: inset 1.5px 1.5px 1px -1px rgba(255, 255, 255, .9), inset -1.5px -1.5px 1px -1px rgba(255, 255, 255, .35),
+    inset 0 0 0 1px rgba(255, 255, 255, .22), 0 8px 24px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* Shapes are capsules and circles, as in Apple's design */
+.glass.round { border-radius: 50%; }
+.bar-group { display: inline-flex; align-items: center; gap: 0; padding: 2px; border-radius: 999px; flex: none; }
+.bar-group .icon-btn, .zoom-ctl button { border-radius: 999px; }
+.bar-group .icon-btn { width: 42px; height: 42px; }
+/* Press: glass swells with a spring, and lights up from within */
+.glass.round, .glass.tinted, .seg-btn, .bar-group .icon-btn, .toolbar .tb, .toolbar .tool, .zoom-ctl button {
+  transition: transform .4s cubic-bezier(.34, 1.56, .64, 1), background-color .2s;
+}
+.glass.round:active, .glass.tinted:active { transform: scale(1.1); }
+@media (hover: hover) { .bar-group .icon-btn:hover, .zoom-ctl button:hover { background: var(--glass-press); } }
+/* older, more specific rules (button hover, dark toast) must not replace the glass */
+.icon-btn.glass:hover, .icon-btn.glass:active, :root[data-theme] .toast.glass {
+  background: radial-gradient(130% 150% at var(--lx, 22%) var(--ly, -20%), var(--sheen) 0%, transparent 48%), var(--tint);
+}
+@media (hover: hover) { .icon-btn.glass:hover { --sheen: var(--glass-sheen-lit); } }
+/* Touch screens keep :hover after a tap: no hover highlights there (they'd stick on the last button) */
+@media (hover: none) {
+  .tb:hover:not(.active), .tool:hover:not(.active), .icon-btn:hover:not(.glass), .zoom-ctl button:hover,
+  .sel-actions button:hover, .menu button:hover, .nav-item:hover:not(.active), .text-btn:hover { background: none; }
+}
+.bar-group .icon-btn:active, .toolbar .tb:active, .toolbar .tool:active, .zoom-ctl button:active, .seg-btn:active {
+  transform: scale(1.12); background: radial-gradient(circle, var(--glass-press) 30%, transparent 72%);
+}
+.icon-btn.glass { color: var(--text); }
+.icon-btn.glass.round { width: 44px; height: 44px; }
+
+/* ── Notes list: floating header, cards scroll underneath ── */
+.list-bar {
+  position: absolute; z-index: 6; left: 0; right: 0; top: 0; background: none; gap: 8px; row-gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 14px) 10px calc(env(safe-area-inset-left) + 14px);
+  pointer-events: none;
+}
+.list-bar > * { pointer-events: auto; }
+.list-bar > .list-title { pointer-events: none; }
+/* scroll edge: content fades and softens under the header so the title stays readable */
+.list-bar::before, .editor-chrome::before {
+  content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 0; bottom: -18px; pointer-events: none;
+  background: linear-gradient(var(--edge) 0%, color-mix(in srgb, var(--edge) 70%, transparent) 50%, transparent 100%);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent);
+}
+.search.glass { border-radius: 999px; height: 44px; }
+.search.glass:focus-within {
+  box-shadow: 0 0 0 2px var(--accent), inset 1.5px 1.5px 1px -1px var(--glass-rim), var(--glass-shadow);
+}
+.list-bar .info-bar { flex: 1 1 100%; margin: 0; border-radius: 20px; order: 9; }
+.notes { padding-top: calc(var(--list-bar-h, 64px) + 6px); scroll-padding-top: calc(var(--list-bar-h, 64px) + 6px); }
+.empty { top: calc(var(--list-bar-h, 64px) + 56px); }
+@media (max-width: 640px) {
+  .list-bar .bar-group { order: 2; }
+  .list-bar .search { margin: 0; }
+}
+.sync-btn::after { border-color: transparent; right: 8px; bottom: 8px; }
+.fab { border-radius: 50%; width: 62px; height: 62px; }
+.fab.glass.tinted { color: #fff; }
+
+/* Sidebar: a floating glass panel (drawer on phones) */
+.sidebar.glass { border-right: 0; }
+@media (min-width: 900px) {
+  .sidebar.glass { margin: calc(env(safe-area-inset-top) + 10px) 0 calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 10px); border-radius: 26px; padding: 8px 10px 10px; }
+}
+@media (max-width: 899.98px) {
+  .sidebar.glass {
+    inset: calc(env(safe-area-inset-top) + 8px) auto calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 8px);
+    border-radius: 26px; padding: 8px 10px 10px; transform: translateX(calc(-100% - 24px));
+  }
+  .sidebar.glass.open { transform: none; }
+}
+@media (hover: hover) { .sidebar.glass .nav-item:hover:not(.active) { background: var(--glass-press); } }
+.sidebar.glass .sidebar-foot { border-top-color: var(--glass-line); }
+
+/* ── Editor: tools float over the page, the page scrolls underneath ── */
+.stage { position: absolute; inset: 0; }
+.editor-chrome {
+  position: absolute; z-index: 10; left: 0; right: 0; top: 0; display: flex; flex-direction: column; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 10px) 8px calc(env(safe-area-inset-left) + 10px);
+  pointer-events: none; --edge: var(--surface-2);
+}
+.editor-chrome .editor-bar { min-height: 0; padding: 0; background: none; border: 0; gap: 8px; pointer-events: none; }
+.editor-bar > * { pointer-events: auto; }
+.editor-bar > .spacer { pointer-events: none; }
+.editor-bar .save-state { margin: 0 4px 0 12px; }
+.editor-chrome .toolbar {
+  pointer-events: auto; border: 0; border-radius: 26px; padding: 5px 8px; width: fit-content; max-width: 100%; align-self: center;
+}
+@media (max-width: 700px) { .editor-chrome .draw-toolbar { border-radius: 24px; width: 100%; } }
+/* tablets in portrait: tools + size + touch switch on the first row, colours on the second (nothing hidden off the edge) */
+@media (min-width: 700.02px) and (max-width: 1040px) {
+  .editor-view:not(.fs) .draw-toolbar { flex-wrap: wrap; justify-content: center; row-gap: 4px; overflow: visible; border-radius: 24px; }
+  .editor-view:not(.fs) .draw-toolbar .colors { order: 10; flex: 1 1 100%; justify-content: center; padding: 2px 0; }
+  .editor-view:not(.fs) .draw-toolbar .colors + .tb-sep, .editor-view:not(.fs) .draw-toolbar .fs-color + .tb-sep { display: none; }
+}
+.toolbar .tb, .toolbar .tool { border-radius: 999px; }
+@media (hover: hover) { .toolbar .tb:hover:not(.active), .toolbar .tool:hover:not(.active) { background: var(--glass-press); } }
+.toolbar .tb-sep { background: var(--glass-line); }
+.page-wrap { margin-top: calc(var(--chrome-h, 112px) + 10px); }
+.seg.glass { position: relative; border-radius: 999px; margin-left: 0; padding: 3px; }
+.seg.glass::before {
+  content: ""; position: absolute; left: 3px; top: 3px; width: 46px; height: 38px; border-radius: 999px;
+  background: var(--seg-thumb); box-shadow: 0 1px 4px rgba(0, 0, 0, .12), inset 1px 1px 1px -.5px rgba(255, 255, 255, .9);
+  transition: transform .42s cubic-bezier(.34, 1.45, .64, 1);
+}
+.seg.glass[data-active="draw"]::before { transform: translateX(46px); }
+.seg.glass .seg-btn { position: relative; z-index: 1; border-radius: 999px; }
+.seg.glass .seg-btn.active { background: none; box-shadow: none; }
+.zoom-ctl.glass { border-radius: 999px; padding: 2px; opacity: 1; overflow: visible; }
+.sel-actions.glass { border-radius: 999px; padding: 4px; }
+.sel-actions.glass button { border-radius: 999px; }
+@media (hover: hover) { .sel-actions.glass button:hover { background: var(--glass-press); } }
+.fs-handle.glass { width: 44px; height: 44px; opacity: 1; color: var(--text); top: calc(env(safe-area-inset-top) + 8px); }
+.rec-bar.glass { padding: 6px 6px 6px 16px; }
+
+/* full-screen writing: one slim floating capsule */
+.editor-view.fs .editor-chrome { padding-top: calc(env(safe-area-inset-top) + 4px); padding-bottom: 4px; gap: 0; }
+.editor-view.fs .toolbar { padding: 3px 6px; box-shadow: inset 1.5px 1.5px 1px -1px var(--glass-rim), inset 0 0 0 1px var(--glass-rim-2), 0 0 0 .5px var(--glass-line), var(--glass-shadow); }
+.editor-view.fs .page-wrap { margin-top: var(--chrome-h, 52px); }
+.editor-view.fs .editor-chrome { --edge: var(--paper); }
+.editor-view.fs.tools-hidden .editor-chrome::before { display: none; }
+
+/* Menus, dialogs, toasts */
+.menu.glass { border: 0; border-radius: 20px; padding: 6px; }
+.menu.glass button { border-radius: 12px; }
+.menu.glass button:focus-visible { background: var(--glass-press); }
+@media (hover: hover) { .menu.glass button:hover { background: var(--glass-press); } }
+.menu.glass .menu-sep { background: var(--glass-line); }
+.toast.glass { border-radius: 20px; color: #fff; }
+.dlg.glass { border-radius: 28px; color: var(--text); }
+.dlg.glass::backdrop { background: rgba(0, 0, 0, .28); }
+.dlg.glass .dlg-actions { border-top-color: var(--glass-line); }
+.dlg.glass input[type="text"], .dlg.glass input[type="url"], .dlg.glass input[type="password"], .dlg.glass select,
+.dlg.glass .choice-row button, .dlg.glass .btn:not(.primary) { background: color-mix(in srgb, var(--bg) 62%, transparent); }
+.dlg.glass .btn, .dlg.glass .choice-row button { border-radius: 999px; }
+
+/* Solid (Settings → Glass: Solid, or the system's Reduce transparency): same shapes, no transparency */
+.no-glass .glass, .no-glass .list-bar::before, .no-glass .editor-chrome::before {
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+.no-glass .glass { --tint: var(--surface); --sheen: transparent; --glass-sheen-lit: transparent; }
+.no-glass .glass.thick { --tint: var(--surface); }
+.no-glass .glass.tinted { --tint: var(--accent); }
+.no-glass .glass.dark { --tint: #2b2723; }
+.no-glass .list-bar::before, .no-glass .editor-chrome::before { background: linear-gradient(var(--edge) 70%, transparent); -webkit-mask-image: none; mask-image: none; }
+@media (prefers-reduced-motion: reduce) {
+  .glass.round, .glass.tinted, .seg-btn, .bar-group .icon-btn, .toolbar .tb, .toolbar .tool, .zoom-ctl button, .seg.glass::before { transition: none; }
+}

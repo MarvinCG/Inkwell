@@ -6,13 +6,14 @@ import { sanitizeHTML, htmlToText, firstImage, escapeHTML } from './sanitize.js'
 import { icon, hydrateIcons, setIcon } from './icons.js';
 import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog, promptDialog } from './ui.js';
 import { notePDF } from './pdf.js';
+import { initGlass } from './glass.js';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {
   app: $('app'), sidebar: $('sidebar'), scrim: $('scrim'), nav: $('nav'),
-  listView: $('listView'), listTitle: $('listTitle'), search: $('search'), notes: $('notes'), empty: $('empty'),
+  listView: $('listView'), listBar: $('listBar'), editorChrome: $('editorChrome'), modeSeg: $('modeSeg'), listTitle: $('listTitle'), search: $('search'), notes: $('notes'), empty: $('empty'),
   trashBar: $('trashBar'), fab: $('fab'), btnMenu: $('btnMenu'), btnSync: $('btnSync'), btnSort: $('btnSort'), btnView: $('btnView'),
   editor: $('editorView'), btnBack: $('btnBack'), modeText: $('modeText'), modeDraw: $('modeDraw'), saveState: $('saveState'),
   btnUndo: $('btnUndo'), btnRedo: $('btnRedo'), btnFav: $('btnFav'), btnNoteMenu: $('btnNoteMenu'),
@@ -137,6 +138,33 @@ function applyTheme() {
   if (ink) { ink.hlAlpha = dark ? 0.5 : 0.32; ink.renderNow(); updateSizeDot(); }
 }
 darkMQ.addEventListener('change', applyTheme);
+const reduceGlassMQ = matchMedia('(prefers-reduced-transparency: reduce)');
+function applyGlass() {
+  document.documentElement.classList.toggle('no-glass', pref('glass', 'on') === 'off' || reduceGlassMQ.matches);
+}
+reduceGlassMQ.addEventListener('change', applyGlass);
+
+// ═════════════════════════ floating bars ═════════════════════════
+// The bars float over the content, so the content needs to know how tall they are: the notes list
+// starts below the header, and the page below the editor's tools (and still scrolls under them).
+state.chromeH = 0;
+function updateChromeInset() {
+  const h = el.listBar.offsetHeight;
+  if (h) el.listView.style.setProperty('--list-bar-h', h + 'px');
+  if (el.editor.hidden || el.editor.classList.contains('tools-hidden')) return;
+  const c = el.editorChrome.offsetHeight;
+  if (!c || c === state.chromeH) return;
+  const delta = c - state.chromeH;
+  const had = state.chromeH;
+  state.chromeH = c;
+  el.editor.style.setProperty('--chrome-h', c + 'px');
+  ink.topInset = c;
+  // tools grew/shrank (e.g. typing ↔ handwriting): keep the visible line where it is, unless at the top
+  if (had && el.scroller.scrollTop > 4) el.scroller.scrollTop += delta;
+  layout();
+}
+new ResizeObserver(() => updateChromeInset()).observe(el.listBar);
+new ResizeObserver(() => updateChromeInset()).observe(el.editorChrome);
 
 // ═════════════════════════ sync ═════════════════════════
 const sync = new Sync({
@@ -494,7 +522,7 @@ function layout() {
   const s = scale();
   el.page.style.width = pw + 'px';
   el.page.style.transform = `scale(${s})`;
-  const viewH = el.scroller.clientHeight / s;
+  const viewH = Math.max(100, el.scroller.clientHeight - state.chromeH) / s;
   el.page.style.minHeight = Math.ceil(Math.max(viewH - 32 / s, ink.maxY() + viewH * 0.6)) + 'px';
   const h = el.page.offsetHeight;
   el.wrap.style.width = pw * s + 'px';
@@ -569,6 +597,8 @@ function openNote(id, { isNew = false } = {}) {
   state.zoom = pref('zoom', 1);
   state.lastScale = 0;
   state.inkViewKey = '';
+  state.chromeH = 0;
+  updateChromeInset();
   ink.resize();
   layout();
   el.scroller.scrollTop = 0;
@@ -656,6 +686,7 @@ function setMode(draw) {
   el.drawToolbar.hidden = !draw;
   el.modeText.classList.toggle('active', !draw);
   el.modeDraw.classList.toggle('active', draw);
+  el.modeSeg.dataset.active = draw ? 'draw' : 'text';
   el.modeText.setAttribute('aria-pressed', String(!draw));
   el.modeDraw.setAttribute('aria-pressed', String(draw));
   ink.setEnabled(draw);
@@ -1323,6 +1354,9 @@ async function openSettings(focus) {
       <div class="section">
         <h3>Appearance</h3>
         ${choice('theme', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], theme)}
+        <span style="display:block;font-size:13px;color:var(--text-2);margin:10px 0 8px">Controls</span>
+        ${choice('glass', [['on', 'Liquid glass'], ['off', 'Solid']], pref('glass', 'on'))}
+        <p class="hint">Liquid glass: toolbars and buttons are see-through and float over your notes. Solid uses less battery and also turns on when the system's <i>Reduce transparency</i> is set.</p>
       </div>
       <div class="section">
         <h3>Your data</h3>
@@ -1347,6 +1381,7 @@ async function openSettings(focus) {
         const b = e.target.closest('[data-v]'); if (!b) return;
         r.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x === b));
         if (r.dataset.choice === 'theme') { setPref('theme', b.dataset.v).then(applyTheme); }
+        if (r.dataset.choice === 'glass') { setPref('glass', b.dataset.v).then(applyGlass); }
         if (r.dataset.choice === 'touchMode') { setPref('touchMode', b.dataset.v).then(applyPenMode); }
         if (r.dataset.choice === 'syncMode') showPanes(b.dataset.v);
         if (r.dataset.choice === 'fullscreen') { setPref('fullscreen', b.dataset.v); if (b.dataset.v === 'always') systemFullscreen(); else if (b.dataset.v === 'off' && document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
@@ -1528,6 +1563,9 @@ async function main() {
   hydrateIcons();
   await store.init();
   applyTheme();
+  applyGlass();
+  initGlass();
+  updateChromeInset();
   buildSwatches();
   buildFullscreenBars();
   const sizes = pref('sizes', null);

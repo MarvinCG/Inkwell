@@ -20,7 +20,7 @@
 <div id="app" class="app">
 
   <!-- ───────── Sidebar / drawer ───────── -->
-  <aside id="sidebar" class="sidebar" aria-label="Folders">
+  <aside id="sidebar" class="sidebar glass thick" aria-label="Folders">
     <div class="sidebar-head">
       <img src="icons/icon.svg" alt="" class="logo" width="28" height="28">
       <span class="brand">Inkwell</span>
@@ -34,44 +34,49 @@
 
   <!-- ───────── Notes list ───────── -->
   <main id="listView" class="list-view">
-    <header class="appbar list-bar">
-      <button id="btnMenu" class="icon-btn only-narrow" type="button" aria-label="Folders" data-icon="menu"></button>
+    <header id="listBar" class="appbar list-bar">
+      <button id="btnMenu" class="icon-btn only-narrow glass round" type="button" aria-label="Folders" data-icon="menu"></button>
       <h1 id="listTitle" class="list-title">All notes</h1>
-      <div class="search">
+      <div class="search glass">
         <span class="ico" data-icon="search"></span>
         <input id="search" type="search" placeholder="Search notes" autocomplete="off" enterkeyhint="search">
       </div>
-      <button id="btnSync" class="icon-btn sync-btn" type="button" aria-label="Sync status" data-icon="cloud"></button>
-      <button id="btnSort" class="icon-btn" type="button" aria-label="Sort" data-icon="sort"></button>
-      <button id="btnView" class="icon-btn" type="button" aria-label="Grid or list" data-icon="grid"></button>
+      <div class="bar-group glass">
+        <button id="btnSync" class="icon-btn sync-btn" type="button" aria-label="Sync status" data-icon="cloud"></button>
+        <button id="btnSort" class="icon-btn" type="button" aria-label="Sort" data-icon="sort"></button>
+        <button id="btnView" class="icon-btn" type="button" aria-label="Grid or list" data-icon="grid"></button>
+      </div>
+      <div id="trashBar" class="info-bar glass" hidden>
+        <span>Notes in the trash are deleted for good after 30 days.</span>
+        <button id="btnEmptyTrash" class="text-btn danger" type="button">Empty trash</button>
+      </div>
     </header>
-    <div id="trashBar" class="info-bar" hidden>
-      <span>Notes in the trash are deleted for good after 30 days.</span>
-      <button id="btnEmptyTrash" class="text-btn danger" type="button">Empty trash</button>
-    </div>
     <div id="notes" class="notes grid" role="list"></div>
     <div id="empty" class="empty" hidden></div>
-    <button id="fab" class="fab" type="button" aria-label="New note" data-icon="plus"></button>
+    <button id="fab" class="fab glass tinted" type="button" aria-label="New note" data-icon="plus"></button>
   </main>
 
   <!-- ───────── Editor ───────── -->
   <section id="editorView" class="editor-view" hidden>
+    <div id="editorChrome" class="editor-chrome">
     <header class="appbar editor-bar">
-      <button id="btnBack" class="icon-btn" type="button" aria-label="Back to notes" data-icon="back"></button>
-      <div class="seg" role="group" aria-label="Input mode">
+      <button id="btnBack" class="icon-btn glass round" type="button" aria-label="Back to notes" data-icon="back"></button>
+      <div id="modeSeg" class="seg glass" role="group" aria-label="Input mode" data-active="text">
         <button id="modeText" class="seg-btn active" type="button" aria-label="Keyboard mode" data-icon="type"></button>
         <button id="modeDraw" class="seg-btn" type="button" aria-label="Handwriting mode" data-icon="pen"></button>
       </div>
       <span class="spacer"></span>
-      <span id="saveState" class="save-state" aria-live="polite"></span>
-      <button id="btnUndo" class="icon-btn" type="button" aria-label="Undo" data-icon="undo"></button>
-      <button id="btnRedo" class="icon-btn" type="button" aria-label="Redo" data-icon="redo"></button>
-      <button id="btnFull" class="icon-btn" type="button" aria-label="Full screen" title="Full screen" data-icon="expand"></button>
-      <button id="btnFav" class="icon-btn" type="button" aria-label="Favorite" data-icon="star"></button>
-      <button id="btnNoteMenu" class="icon-btn" type="button" aria-label="More" data-icon="more"></button>
+      <div class="bar-group glass">
+        <span id="saveState" class="save-state" aria-live="polite"></span>
+        <button id="btnUndo" class="icon-btn" type="button" aria-label="Undo" data-icon="undo"></button>
+        <button id="btnRedo" class="icon-btn" type="button" aria-label="Redo" data-icon="redo"></button>
+        <button id="btnFull" class="icon-btn" type="button" aria-label="Full screen" title="Full screen" data-icon="expand"></button>
+        <button id="btnFav" class="icon-btn" type="button" aria-label="Favorite" data-icon="star"></button>
+        <button id="btnNoteMenu" class="icon-btn" type="button" aria-label="More" data-icon="more"></button>
+      </div>
     </header>
 
-    <div id="textToolbar" class="toolbar" role="toolbar" aria-label="Formatting">
+    <div id="textToolbar" class="toolbar glass" role="toolbar" aria-label="Formatting">
       <button class="tb" data-cmd="bold" aria-label="Bold" data-icon="bold"></button>
       <button class="tb" data-cmd="italic" aria-label="Italic" data-icon="italic"></button>
       <button class="tb" data-cmd="underline" aria-label="Underline" data-icon="underline"></button>
@@ -95,7 +100,7 @@
       <button class="tb" data-cmd="removeFormat" aria-label="Clear formatting" data-icon="clearFormat"></button>
     </div>
 
-    <div id="drawToolbar" class="toolbar draw-toolbar" role="toolbar" aria-label="Handwriting tools" hidden>
+    <div id="drawToolbar" class="toolbar draw-toolbar glass" role="toolbar" aria-label="Handwriting tools" hidden>
       <button class="tool active" data-tool="pen" aria-label="Pen" data-icon="pen"></button>
       <button class="tool" data-tool="pencil" aria-label="Pencil" data-icon="pencil"></button>
       <button class="tool" data-tool="hl" aria-label="Highlighter" data-icon="marker"></button>
@@ -116,6 +121,7 @@
         <span class="ico" data-icon="hand"></span><span class="pill-label">Pen only</span>
       </button>
     </div>
+    </div>
 
     <div id="stage" class="stage">
       <div id="scroller" class="scroller">
@@ -129,21 +135,21 @@
       <canvas id="inkCanvas" class="ink-canvas"></canvas>
       <canvas id="liveCanvas" class="ink-canvas live"></canvas>
       <div id="selBox" class="sel-box" hidden>
-        <div class="sel-actions">
+        <div class="sel-actions glass">
           <button type="button" data-sel="duplicate">Duplicate</button>
           <button type="button" data-sel="recolor">Recolor</button>
           <button type="button" data-sel="delete" class="danger">Delete</button>
         </div>
       </div>
-      <button id="fsHandle" class="fs-handle" type="button" aria-label="Show tools" data-icon="chevronDown" hidden></button>
-      <div class="zoom-ctl" aria-label="Zoom">
+      <button id="fsHandle" class="fs-handle glass round" type="button" aria-label="Show tools" data-icon="chevronDown" hidden></button>
+      <div class="zoom-ctl glass" aria-label="Zoom">
         <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
         <button id="zoomReset" type="button" aria-label="Fit to width">100%</button>
         <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
       </div>
     </div>
 
-    <div id="recBar" class="rec-bar" hidden>
+    <div id="recBar" class="rec-bar glass" hidden>
       <span class="rec-dot"></span><span id="recTime">0:00</span>
       <button id="recCancel" class="text-btn" type="button">Cancel</button>
       <button id="recStop" class="text-btn strong" type="button">Done</button>
@@ -152,12 +158,14 @@
 </div>
 
 <!-- Popover menu + dialogs -->
-<div id="menu" class="menu" role="menu" hidden></div>
-<div id="toast" class="toast" role="status" hidden></div>
+<div id="menu" class="menu glass thick" role="menu" hidden></div>
+<div id="toast" class="toast glass dark" role="status" hidden></div>
+<!-- Lens filters for the glass refraction (Chrome/Edge), generated by js/glass.js -->
+<svg id="glassDefs" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden"><defs></defs></svg>
 <input id="fileImage" type="file" accept="image/*" hidden multiple>
 <input id="fileImport" type="file" accept="application/json,.json" hidden>
 
-<dialog id="dlg" class="dlg"></dialog>
+<dialog id="dlg" class="dlg glass thick"></dialog>
 
 <div id="printArea" class="print-area" aria-hidden="true"></div>
 

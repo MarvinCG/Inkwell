@@ -843,7 +843,7 @@ export class InkLayer {
     const left = T.ox + b.x0 * T.s, top = T.oy + b.y0 * T.s;
     const w = (b.x1 - b.x0) * T.s, h = (b.y1 - b.y0) * T.s;
     Object.assign(this.selBox.style, { left: left + 'px', top: top + 'px', width: w + 'px', height: h + 'px' });
-    this.selBox.classList.toggle('below', top < 64);
+    this.selBox.classList.toggle('below', top < (this.topInset || 0) + 64); // room for the actions above it, below the tools
     this.selBox.hidden = false;
   }
   clearSelection(render = true) {
