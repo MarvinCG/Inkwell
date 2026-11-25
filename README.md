@@ -55,6 +55,7 @@ Notes you wrote before setting up sync are uploaded on the first sync.
 - **Typing**: bold/italic/underline/strike, H1/H2, checklists (tap the box), bullets, numbers, text color, highlight, alignment, photos, voice recordings, dividers. On iPad, Apple Pencil *Scribble* turns handwriting into typed text while in typing mode.
 - **Handwriting**: pen (pressure-sensitive), pencil, highlighter, eraser (removes whole strokes), lasso (select → drag to move, duplicate, recolor, delete). 12 colors + custom, size slider, undo/redo.
 - **Pen only / palm rejection**: the first time an S Pen or Apple Pencil touches the page, Inkwell switches to *pen only*: fingers scroll and pinch-zoom, your palm is ignored. Toggle it with the hand button, or in Settings. With S Pen, hold the side button while writing to erase.
+- **Full screen** (⤢ in a note, or Settings → Full screen): hides the note's top bar and Android's status and navigation bars, the page fills the display, and all tools sit in one slim row (tap ⌃ to tuck them away). On phones it turns on automatically when you start handwriting; *Always* keeps the whole app full screen. The back gesture leaves full screen.
 - **Zoom**: −/100%/+ buttons, pinch (pen-only mode), Ctrl + mouse wheel / touchpad pinch on the laptop.
 - **Page style** (⋮ menu): blank, lined, grid or dotted; white, cream, mint or sky paper; narrow (phone) or wide (tablet/laptop) page. A note keeps its page width on every device, so handwriting stays exactly where you wrote it next to the text — a note made on the laptop opens zoomed out on the phone, like Samsung Notes.
 - **Organize**: folders with colors, favorites (★), sort by modified/created/title, grid or list view, search across titles and text. Long-press (or right-click) a note for quick actions.
@@ -102,6 +103,7 @@ Push changes to `main` (bump `VERSION` in `web/sw.js` so installed apps pick the
 - Photos are compressed to 1600 px JPEG; voice notes are capped at 15 minutes. Media of deleted notes stays in `inkwell-data`'s history.
 - Voice notes recorded on Android are WebM/Opus when Chrome can't record MP4; older iPadOS versions may not play those.
 - It's an installed web app, not a Play Store / App Store app: updates come from this repository.
+- Outside full screen, Chrome paints Android's navigation bar with the color fixed in the manifest when the app was installed; a web app can't recolor it while running. Full screen hides it.
 
 ## Docs
 - Fine-grained personal access tokens: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
