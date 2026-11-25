@@ -1,0 +1,25 @@
+# Inkwell Notes — sync server + web app
+#   1) cp .env.example .env  and set SYNC_TOKEN  (openssl rand -hex 24)
+#   2) mkdir -p data
+#   3) docker compose up -d --build
+services:
+  inkwell:
+    build: .
+    image: inkwell:1.0.0
+    container_name: inkwell
+    restart: unless-stopped
+    user: "1000:1000"            # owner of ./data on the host (aaron = 1000 on a fresh Ubuntu)
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8095:8080"    # only reachable locally; Tailscale Serve publishes it with HTTPS
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
