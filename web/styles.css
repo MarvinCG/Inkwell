@@ -512,11 +512,14 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
    specular rims (top-left and bottom-right), soft shadow. On Chromium, js/glass.js swaps the blur
    for an SVG lens that also bends the content at the rim. "Solid" in Settings (or the system's
    Reduce transparency) turns it all into opaque surfaces. */
+/* the press/hover light is a registered colour so it can fade in and out instead of switching */
+@property --glow { syntax: '<color>'; inherits: false; initial-value: rgba(255, 255, 255, 0); }
 :root {
   --glass: rgba(255, 255, 255, .5);
   --glass-thick: rgba(251, 250, 248, .8);
   --glass-sheen: rgba(255, 255, 255, .75);
-  --glass-sheen-lit: rgba(255, 255, 255, 1);
+  --glass-glow: rgba(255, 255, 255, .75);
+  --glass-glow-hover: rgba(255, 255, 255, .4);
   --glass-rim: rgba(255, 255, 255, .95);
   --glass-rim-2: rgba(255, 255, 255, .4);
   --glass-line: rgba(60, 40, 20, .08);
@@ -529,7 +532,8 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
   --glass: rgba(46, 46, 48, .5);
   --glass-thick: rgba(34, 34, 36, .82);
   --glass-sheen: rgba(255, 255, 255, .16);
-  --glass-sheen-lit: rgba(255, 255, 255, .32);
+  --glass-glow: rgba(255, 255, 255, .12);
+  --glass-glow-hover: rgba(255, 255, 255, .06);
   --glass-rim: rgba(255, 255, 255, .38);
   --glass-rim-2: rgba(255, 255, 255, .1);
   --glass-line: rgba(0, 0, 0, .5);
@@ -540,7 +544,13 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .glass {
   --sheen: var(--glass-sheen);
   --tint: var(--glass);
-  background: radial-gradient(130% 150% at var(--lx, 22%) var(--ly, -20%), var(--sheen) 0%, transparent 48%), var(--tint);
+  --glow: rgba(255, 255, 255, 0);
+  /* a small light under the finger/pointer (fixed size, so big bars don't light up as a whole),
+     the resting specular sheen at the top-left, then the tint */
+  background:
+    radial-gradient(circle 64px at var(--lx, 50%) var(--ly, 50%), var(--glow), rgba(255, 255, 255, 0)),
+    radial-gradient(130% 150% at 22% -20%, var(--sheen) 0%, transparent 48%), var(--tint);
+  transition: --glow .3s ease-out;
   -webkit-backdrop-filter: blur(14px) saturate(1.8);
   backdrop-filter: blur(14px) saturate(1.8);
   box-shadow:
@@ -551,7 +561,8 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
     var(--glass-shadow);
   border: 0;
 }
-.glass.lit { --sheen: var(--glass-sheen-lit); }
+.glass.lit { --glow: var(--glass-glow); }
+@media (hover: hover) { .glass:not(.thick):not(.dark):hover { --glow: var(--glass-glow-hover); } .glass.lit:hover { --glow: var(--glass-glow); } }
 .glass.thick { --tint: var(--glass-thick); -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); }
 .glass.dark {
   --tint: rgba(28, 26, 24, .66); --sheen: rgba(255, 255, 255, .14);
@@ -569,15 +580,16 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .bar-group .icon-btn { width: 42px; height: 42px; }
 /* Press: glass swells with a spring, and lights up from within */
 .glass.round, .glass.tinted, .seg-btn, .bar-group .icon-btn, .toolbar .tb, .toolbar .tool, .zoom-ctl button {
-  transition: transform .4s cubic-bezier(.34, 1.56, .64, 1), background-color .2s;
+  transition: transform .4s cubic-bezier(.34, 1.56, .64, 1), background-color .2s, --glow .3s ease-out;
 }
 .glass.round:active, .glass.tinted:active { transform: scale(1.1); }
 @media (hover: hover) { .bar-group .icon-btn:hover, .zoom-ctl button:hover { background: var(--glass-press); } }
 /* older, more specific rules (button hover, dark toast) must not replace the glass */
 .icon-btn.glass:hover, .icon-btn.glass:active, :root[data-theme] .toast.glass {
-  background: radial-gradient(130% 150% at var(--lx, 22%) var(--ly, -20%), var(--sheen) 0%, transparent 48%), var(--tint);
+  background:
+    radial-gradient(circle 64px at var(--lx, 50%) var(--ly, 50%), var(--glow), rgba(255, 255, 255, 0)),
+    radial-gradient(130% 150% at 22% -20%, var(--sheen) 0%, transparent 48%), var(--tint);
 }
-@media (hover: hover) { .icon-btn.glass:hover { --sheen: var(--glass-sheen-lit); } }
 /* Touch screens keep :hover after a tap: no hover highlights there (they'd stick on the last button) */
 @media (hover: none) {
   .tb:hover:not(.active), .tool:hover:not(.active), .icon-btn:hover:not(.glass), .zoom-ctl button:hover,
@@ -700,11 +712,11 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .no-glass .glass, .no-glass .list-bar::before, .no-glass .editor-chrome::before {
   -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
 }
-.no-glass .glass { --tint: var(--surface); --sheen: transparent; --glass-sheen-lit: transparent; }
+.no-glass .glass { --tint: var(--surface); --sheen: transparent; --glass-glow: transparent; --glass-glow-hover: transparent; }
 .no-glass .glass.thick { --tint: var(--surface); }
 .no-glass .glass.tinted { --tint: var(--accent); }
 .no-glass .glass.dark { --tint: #2b2723; }
 .no-glass .list-bar::before, .no-glass .editor-chrome::before { background: linear-gradient(var(--edge) 70%, transparent); -webkit-mask-image: none; mask-image: none; }
 @media (prefers-reduced-motion: reduce) {
-  .glass.round, .glass.tinted, .seg-btn, .bar-group .icon-btn, .toolbar .tb, .toolbar .tool, .zoom-ctl button, .seg.glass::before { transition: none; }
+  .glass, .glass.round, .glass.tinted, .seg-btn, .bar-group .icon-btn, .toolbar .tb, .toolbar .tool, .zoom-ctl button, .seg.glass::before { transition: none; }
 }

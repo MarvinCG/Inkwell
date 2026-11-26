@@ -8,7 +8,7 @@ import { toast, showMenu, closeMenu, menuOpen, dialog, dialogOpen, confirmDialog
 import { notePDF } from './pdf.js';
 import { initGlass } from './glass.js';
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const FRAMED = (() => { try { return window.self !== window.top; } catch { return true; } })();
 const $ = (id) => document.getElementById(id);
 const el = {

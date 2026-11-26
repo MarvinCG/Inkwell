@@ -3,7 +3,7 @@
 //    backdrop-filter. A displacement map, computed for the control's exact size and corner radius,
 //    bends what's behind the rim the way a curved glass edge does. Safari can't render SVG filters in
 //    backdrop-filter, so on the iPad the CSS frosted glass (blur + rim light) is used as is.
-//  • Light: the sheen follows the mouse/pen when hovering and lights up under a finger on press.
+//  • Light: a small glow follows the mouse/pen over controls and fades in under a finger on press.
 
 export const LENS_OK = (() => {
   try {
@@ -117,7 +117,7 @@ function bindLight(elm) {
   const off = () => elm.classList.remove('lit');
   elm.addEventListener('pointerup', off, { passive: true });
   elm.addEventListener('pointercancel', off, { passive: true });
-  elm.addEventListener('pointerleave', () => { off(); elm.style.removeProperty('--lx'); elm.style.removeProperty('--ly'); }, { passive: true });
+  elm.addEventListener('pointerleave', off, { passive: true }); // keep the position: the light fades out where it was
 }
 
 /** Set up every glass control under root (call again for controls added later). */
@@ -125,8 +125,10 @@ export function initGlass(root = document) {
   for (const elm of root.querySelectorAll('.glass')) {
     if (elm._glass) continue;
     elm._glass = true;
+    // Big translucent panels (sidebar, menus, dialogs, toasts) are frosted only: no lens and no
+    // press light (on a whole panel it read as a white flash in dark mode).
+    if (elm.matches('.thick, .dark')) continue;
     bindLight(elm);
-    // Big translucent panels (menus, dialogs, drawer, toasts) stay frosted: no lens.
-    if (ro && !elm.matches('.thick, .dark')) ro.observe(elm);
+    if (ro) ro.observe(elm);
   }
 }
